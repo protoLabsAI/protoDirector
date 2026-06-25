@@ -118,8 +118,10 @@ struct AgentPane: View {
         let key = AnthropicKeychain.load() ?? ""
         hasKey = !key.isEmpty
         maskedKey = mask(key)
-        gatewayBaseURL = GatewayConfig.baseURLString
-        gatewayModel = GatewayConfig.model
+        let savedURL = GatewayConfig.baseURLString
+        let savedModel = GatewayConfig.model
+        gatewayBaseURL = savedURL.isEmpty ? GatewayConfig.defaultBaseURL : savedURL
+        gatewayModel = savedModel.isEmpty ? GatewayConfig.defaultModel : savedModel
         gatewayHasKey = !(GatewayKeychain.load() ?? "").isEmpty
     }
 
