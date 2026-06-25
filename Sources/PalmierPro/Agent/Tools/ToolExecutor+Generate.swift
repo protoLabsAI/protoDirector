@@ -414,7 +414,11 @@ extension ToolExecutor {
         )
     }
 
-    func listModels(_ args: [String: Any]) -> ToolResult {
+    func listModels(_ args: [String: Any]) async -> ToolResult {
+        if OpenAICompatGenerationClient.gatewayConfigured,
+           let client = OpenAICompatGenerationClient.fromGateway() {
+            return await listGatewayModels(client: client, filter: args.string("type"))
+        }
         let filter = args.string("type")
         var out: [[String: Any]] = []
         if filter == nil || filter == "video" {
@@ -437,6 +441,40 @@ extension ToolExecutor {
             return .error("Failed to encode model list")
         }
         return .ok(json)
+    }
+
+    private func listGatewayModels(
+        client: OpenAICompatGenerationClient, filter: String?
+    ) async -> ToolResult {
+        let models: [OpenAICompatGenerationClient.GatewayModel]
+        do {
+            models = try await client.listModels()
+        } catch {
+            return .error("Could not list gateway models: \(error.localizedDescription)")
+        }
+        var out: [[String: Any]] = []
+        for model in models {
+            let type = Self.gatewayModelType(model.mode)
+            if let filter, !filter.isEmpty, filter != type { continue }
+            var info: [String: Any] = ["id": model.id, "type": type]
+            if let mode = model.mode { info["mode"] = mode }
+            out.append(info)
+        }
+        let body: [String: Any] = ["models": out, "loaded": true, "source": "gateway"]
+        guard let json = Self.jsonString(body) else {
+            return .error("Failed to encode model list")
+        }
+        return .ok(json)
+    }
+
+    /// Map a LiteLLM `model_info.mode` to the tool's type vocabulary.
+    nonisolated static func gatewayModelType(_ mode: String?) -> String {
+        guard let mode = mode?.lowercased() else { return "unknown" }
+        if mode.contains("image") { return "image" }
+        if mode.contains("video") { return "video" }
+        if mode.contains("audio") || mode.contains("speech") || mode.contains("transcription") { return "audio" }
+        if mode.contains("chat") || mode.contains("completion") { return "chat" }
+        return mode
     }
 
     nonisolated static func videoModelInfo(_ m: VideoModelConfig, includeType: Bool = false) -> [String: Any] {

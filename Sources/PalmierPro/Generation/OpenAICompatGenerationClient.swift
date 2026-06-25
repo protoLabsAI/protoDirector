@@ -60,6 +60,67 @@ struct OpenAICompatGenerationClient: Sendable {
         return urls
     }
 
+    // MARK: - Model discovery
+
+    struct GatewayModel: Sendable, Equatable {
+        let id: String
+        let mode: String?   // LiteLLM model_info.mode (e.g. "image_generation"); nil from plain /v1/models
+    }
+
+    /// List the gateway's models. Prefers LiteLLM `/model/info` (carries modality);
+    /// falls back to the OpenAI-standard `/v1/models` (ids only).
+    func listModels() async throws -> [GatewayModel] {
+        if let info = try? await fetchModelInfo(), !info.isEmpty { return info }
+        return try await fetchBasicModels()
+    }
+
+    private func authedRequest(_ url: URL) -> URLRequest {
+        var request = URLRequest(url: url)
+        if !apiKey.isEmpty { request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
+        return request
+    }
+
+    private func fetchModelInfo() async throws -> [GatewayModel] {
+        guard var comps = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
+            throw OpenAICompatGenerationError.decodeFailed
+        }
+        comps.path = "/model/info"   // LiteLLM mgmt endpoint lives at the gateway root
+        comps.query = nil
+        guard let url = comps.url else { throw OpenAICompatGenerationError.decodeFailed }
+        let (data, response) = try await URLSession.shared.data(for: authedRequest(url))
+        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
+            throw OpenAICompatGenerationError.httpError(status: http.statusCode, body: "")
+        }
+        return Self.parseModelInfo(data)
+    }
+
+    private func fetchBasicModels() async throws -> [GatewayModel] {
+        let url = baseURL.appendingPathComponent("models")
+        let (data, response) = try await URLSession.shared.data(for: authedRequest(url))
+        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
+            throw OpenAICompatGenerationError.httpError(
+                status: http.statusCode, body: String(data: data, encoding: .utf8) ?? ""
+            )
+        }
+        return Self.parseBasicModels(data)
+    }
+
+    static func parseModelInfo(_ data: Data) -> [GatewayModel] {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let items = obj["data"] as? [[String: Any]] else { return [] }
+        return items.compactMap { item in
+            guard let name = (item["model_name"] as? String) ?? (item["id"] as? String) else { return nil }
+            let mode = (item["model_info"] as? [String: Any])?["mode"] as? String
+            return GatewayModel(id: name, mode: mode)
+        }
+    }
+
+    static func parseBasicModels(_ data: Data) -> [GatewayModel] {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let items = obj["data"] as? [[String: Any]] else { return [] }
+        return items.compactMap { ($0["id"] as? String).map { GatewayModel(id: $0, mode: nil) } }
+    }
+
     // Pure + testable: parse an OpenAI images response into URLs or decoded bytes.
     // gpt-image-1 returns `b64_json` only; DALL-E / many gateway models return `url`.
     enum DecodedImage: Sendable, Equatable {

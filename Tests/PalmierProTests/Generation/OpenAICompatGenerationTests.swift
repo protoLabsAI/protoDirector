@@ -44,4 +44,33 @@ struct OpenAICompatGenerationTests {
             try OpenAICompatGenerationClient.decodeImages(from: Data("not json".utf8))
         }
     }
+
+    // MARK: - Model discovery
+
+    @Test func parsesModelInfoWithModality() {
+        let data = json(["data": [
+            ["model_name": "protolabs/reasoning", "model_info": ["mode": "chat"]],
+            ["model_name": "protolabs/image", "model_info": ["mode": "image_generation"]],
+            ["model_name": "no-mode"],
+        ]])
+        let models = OpenAICompatGenerationClient.parseModelInfo(data)
+        #expect(models == [
+            .init(id: "protolabs/reasoning", mode: "chat"),
+            .init(id: "protolabs/image", mode: "image_generation"),
+            .init(id: "no-mode", mode: nil),
+        ])
+    }
+
+    @Test func parsesBasicModels() {
+        let data = json(["data": [["id": "a", "object": "model"], ["id": "b", "object": "model"]]])
+        let models = OpenAICompatGenerationClient.parseBasicModels(data)
+        #expect(models == [.init(id: "a", mode: nil), .init(id: "b", mode: nil)])
+    }
+
+    @Test func mapsModeToType() {
+        #expect(ToolExecutor.gatewayModelType("image_generation") == "image")
+        #expect(ToolExecutor.gatewayModelType("chat") == "chat")
+        #expect(ToolExecutor.gatewayModelType("audio_speech") == "audio")
+        #expect(ToolExecutor.gatewayModelType(nil) == "unknown")
+    }
 }
