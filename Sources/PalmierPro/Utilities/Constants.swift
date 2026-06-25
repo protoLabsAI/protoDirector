@@ -82,6 +82,7 @@ enum Zoom {
     static let min: Double = 0.05
     static let floor: Double = 0.0001
     static let max: Double = 40.0
+    static let toolbarStepFactor: Double = 1.25
     static let scrollSensitivity: Double = 0.04
     static let magnifySensitivity: Double = 1.5 
     static let panSpeed: Double = 5.0
@@ -112,12 +113,15 @@ enum Project {
     static let thumbnailFilename = "thumbnail.jpg"
     static let mediaDirectoryName = "media"
 
-    static let storageDirectory: URL = {
-        let url = FileManager.default.homeDirectoryForCurrentUser
+    static var storageDirectory: URL {
+        FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Documents/Palmier Pro", isDirectory: true)
+    }
+
+    nonisolated static func ensureStorageDirectory() {
+        let url = storageDirectory
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        return url
-    }()
+    }
 }
 
 func gcd(_ a: Int, _ b: Int) -> Int {

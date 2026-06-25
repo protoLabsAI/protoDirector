@@ -10,6 +10,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = Updater.shared
 
         HomeWindowController.shared.showWindow(nil)
+        Task.detached(priority: .utility) {
+            Project.ensureStorageDirectory()
+        }
 
         AppNotifications.configure()
 
@@ -25,6 +28,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             AppState.shared.showHome()
         }
         return true
+    }
+
+    @MainActor
+    @objc func newProject(_ sender: Any?) {
+        AppState.shared.createNewProject()
+    }
+
+    @MainActor
+    @objc func openProject(_ sender: Any?) {
+        AppState.shared.openProjectFromPanel()
     }
 
     @MainActor

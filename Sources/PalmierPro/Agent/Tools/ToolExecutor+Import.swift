@@ -8,7 +8,7 @@ extension ToolExecutor {
     private static let importMediaAllowedKeys: Set<String> = ["source", "name", "folderId"]
     private static let importSourceAllowedKeys: Set<String> = ["url", "path", "bytes", "mimeType"]
 
-    func importMedia(_ editor: EditorViewModel, _ args: [String: Any]) throws -> ToolResult {
+    func importMedia(_ editor: EditorViewModel, _ args: [String: Any]) async throws -> ToolResult {
         try validateUnknownKeys(args, allowed: Self.importMediaAllowedKeys, path: "import_media")
         guard let source = args["source"] as? [String: Any] else {
             throw ToolError("Missing required 'source' object")
@@ -29,7 +29,7 @@ extension ToolExecutor {
         let providedName = args.string("name")
 
         if let pathStr {
-            return try importFromPath(editor: editor, path: pathStr, name: providedName, folderId: folderId)
+            return try await importFromPath(editor: editor, path: pathStr, name: providedName, folderId: folderId)
         }
         if let bytesStr {
             guard let mimeType else {
@@ -43,14 +43,14 @@ extension ToolExecutor {
         throw ToolError("unreachable")
     }
 
-    private func importFromPath(editor: EditorViewModel, path: String, name: String?, folderId: String?) throws -> ToolResult {
+    private func importFromPath(editor: EditorViewModel, path: String, name: String?, folderId: String?) async throws -> ToolResult {
         let fileURL = URL(fileURLWithPath: path)
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: fileURL.path, isDirectory: &isDir) else {
             throw ToolError("File not found: \(path)")
         }
         if isDir.boolValue {
-            let summary = editor.importFinderItems([fileURL], into: folderId)
+            let summary = await editor.importFinderItems([fileURL], into: folderId)
             guard summary.assetCount > 0 else {
                 throw ToolError("No supported media found in folder: \(path)")
             }
@@ -58,7 +58,7 @@ extension ToolExecutor {
         }
         let ext = fileURL.pathExtension.lowercased()
         guard ClipType(fileExtension: ext) != nil else {
-            throw ToolError("Unsupported file extension '.\(ext)'. Supported: mov/mp4/m4v, mp3/wav/aac/m4a, png/jpg/jpeg/tiff/heic, json (Lottie).")
+            throw ToolError("Unsupported file extension '.\(ext)'. Supported: mov/mp4/m4v, mp3/wav/aac/m4a/aiff/aifc/flac, png/jpg/jpeg/tiff/heic, json (Lottie).")
         }
         guard let asset = editor.addMediaAsset(from: fileURL) else {
             throw ToolError("Failed to import file: \(path)")
@@ -72,7 +72,7 @@ extension ToolExecutor {
             throw ToolError("source.bytes is too large (\(base64.utf8.count) chars; max \(Self.importBytesMaxBase64Length)). Use source.url or source.path for larger files.")
         }
         guard let fileExt = Self.fileExtension(forMime: mimeType) else {
-            throw ToolError("Unsupported mimeType '\(mimeType)'. Accepted: video/mp4, video/quicktime, audio/mpeg, audio/wav, audio/aac, audio/mp4, image/png, image/jpeg, image/tiff, image/heic.")
+            throw ToolError("Unsupported mimeType '\(mimeType)'. Accepted: video/mp4, video/quicktime, audio/mpeg, audio/wav, audio/aac, audio/mp4, audio/aiff, audio/flac, image/png, image/jpeg, image/tiff, image/heic.")
         }
         guard let data = Data(base64Encoded: base64, options: [.ignoreUnknownCharacters]), !data.isEmpty else {
             throw ToolError("source.bytes is not valid non-empty base64")
@@ -118,7 +118,7 @@ extension ToolExecutor {
         let fileExt: String
         if let mimeOverride {
             guard let mapped = Self.fileExtension(forMime: mimeOverride) else {
-                throw ToolError("Unsupported mimeType '\(mimeOverride)'. Accepted: video/mp4, video/quicktime, audio/mpeg, audio/wav, audio/aac, audio/mp4, image/png, image/jpeg, image/tiff, image/heic.")
+                throw ToolError("Unsupported mimeType '\(mimeOverride)'. Accepted: video/mp4, video/quicktime, audio/mpeg, audio/wav, audio/aac, audio/mp4, audio/aiff, audio/flac, image/png, image/jpeg, image/tiff, image/heic.")
             }
             fileExt = mapped
         } else {
@@ -219,6 +219,9 @@ extension ToolExecutor {
         case "audio/wav", "audio/x-wav", "audio/wave": return "wav"
         case "audio/aac": return "aac"
         case "audio/mp4", "audio/m4a", "audio/x-m4a": return "m4a"
+        case "audio/aiff", "audio/x-aiff": return "aiff"
+        case "audio/aifc", "audio/x-aifc": return "aifc"
+        case "audio/flac", "audio/x-flac": return "flac"
         case "image/png": return "png"
         case "image/jpeg", "image/jpg": return "jpg"
         case "image/tiff": return "tiff"
