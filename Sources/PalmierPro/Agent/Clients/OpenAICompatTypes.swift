@@ -14,8 +14,22 @@ enum GatewayConfig {
     static let baseURLKey = "agentGatewayBaseURL"
     static let modelKey = "agentGatewayModel"
 
-    static var baseURLString: String { UserDefaults.standard.string(forKey: baseURLKey) ?? "" }
-    static var model: String { UserDefaults.standard.string(forKey: modelKey) ?? "" }
+    // Fork default: route the agent through the protoLabs LiteLLM gateway. The API key
+    // is deliberately NOT baked in — set it in Settings, or the OPENAI_COMPAT_API_KEY
+    // env in DEBUG. Used until the operator saves their own (Clear writes empties, which
+    // override the default).
+    static let defaultBaseURL = "https://api.proot-labs.ai/v1"
+    static let defaultModel = "protolabs/reasoning"
+
+    static var baseURLString: String {
+        guard UserDefaults.standard.object(forKey: baseURLKey) != nil else { return defaultBaseURL }
+        return UserDefaults.standard.string(forKey: baseURLKey) ?? ""
+    }
+
+    static var model: String {
+        guard UserDefaults.standard.object(forKey: modelKey) != nil else { return defaultModel }
+        return UserDefaults.standard.string(forKey: modelKey) ?? ""
+    }
 
     static func save(baseURL: String, model: String) {
         UserDefaults.standard.set(baseURL, forKey: baseURLKey)
