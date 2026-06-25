@@ -65,7 +65,7 @@ if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
 fi
 
 echo "==> Generating release notes from commit log"
-NOTES_CLEAN="$(mktemp -t palmier-release.XXXXXX).md"
+NOTES_CLEAN="$(mktemp -t protodirector-release.XXXXXX).md"
 trap 'rm -f "$NOTES_CLEAN"' EXIT
 LAST_TAG="$(git describe --tags --abbrev=0 2>/dev/null || echo '')"
 {
@@ -98,7 +98,7 @@ fi
 echo "    $VERSION (build $NEW_BUILD)"
 
 echo "==> Building signed + notarized DMG"
-BUILD_LOG="$(mktemp -t palmier-build.XXXXXX).log"
+BUILD_LOG="$(mktemp -t protodirector-build.XXXXXX).log"
 trap 'rm -f "$NOTES_CLEAN" "$BUILD_LOG"' EXIT
 ./scripts/bundle.sh release --dist 2>&1 | tee "$BUILD_LOG"
 
