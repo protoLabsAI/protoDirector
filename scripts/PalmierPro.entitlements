@@ -4,10 +4,10 @@
 <dict>
 	<key>keychain-access-groups</key>
 	<array>
-		<string>MMFLRC7562.io.palmier.pro</string>
+		<string>MMFLRC7562.studio.protolabs.protodirector</string>
 	</array>
 	<key>com.apple.application-identifier</key>
-	<string>MMFLRC7562.io.palmier.pro</string>
+	<string>MMFLRC7562.studio.protolabs.protodirector</string>
 	<key>com.apple.developer.team-identifier</key>
 	<string>MMFLRC7562</string>
 </dict>

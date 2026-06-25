@@ -5,7 +5,7 @@ enum Telemetry {
     typealias Payload = [String: Any]
 
     private static let dsn = Bundle.main.object(forInfoDictionaryKey: "SentryDSN") as? String ?? ""
-    private static let enabledKey = "io.palmier.pro.telemetry.enabled"
+    private static let enabledKey = "studio.protolabs.protodirector.telemetry.enabled"
 
     static var isEnabled: Bool {
         get {
@@ -41,7 +41,7 @@ enum Telemetry {
             options.enableUncaughtNSExceptionReporting = true
             if let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
                let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String {
-                options.releaseName = "palmier-pro@\(version)+\(build)"
+                options.releaseName = "protodirector@\(version)+\(build)"
             }
         }
         didStart = true

@@ -30,7 +30,7 @@ regenerates the Swift tokenizer golden tests.
 ## Hosting
 
 The build output (two encoder zips, tokenizer.zip, manifest.json) is uploaded to
-huggingface.co/palmier-io/siglip2-base-coreml.
+huggingface.co/protoLabsAI/siglip2-base-coreml.
 
 ## Download
 

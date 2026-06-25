@@ -8,7 +8,7 @@ final class MCPService {
 
     static let port: UInt16 = 19789
 
-    private static let enabledKey = "io.palmier.pro.mcp.enabled"
+    private static let enabledKey = "studio.protolabs.protodirector.mcp.enabled"
 
     static var isEnabledPreference: Bool {
         get {
@@ -35,7 +35,7 @@ final class MCPService {
     func start() {
         let httpServer = MCPHTTPServer(port: Self.port) { [weak self] in
             let server = Server(
-                name: "palmier-pro",
+                name: "protodirector",
                 version: "1.0.0",
                 instructions: AgentInstructions.serverInstructions,
                 capabilities: .init(

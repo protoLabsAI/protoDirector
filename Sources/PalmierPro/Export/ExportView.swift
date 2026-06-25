@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 enum ExportMode: String, CaseIterable, Identifiable {
     case video = "Video (.mp4)"
     case xml = "Timeline (.xml)"
-    case palmierProject = "Palmier Project (.palmier)"
+    case palmierProject = "protoDirector Project (.palmier)"
 
     var id: String { rawValue }
 }
@@ -280,7 +280,7 @@ struct ExportView: View {
         }
     }
 
-    /// Quick estimate for exporting a Palmier Project
+    /// Quick estimate for exporting a protoDirector Project
     private func computePalmierSummary() -> (collect: Int, missing: Int, bytes: Int64) {
         var collect = 0, missing = 0
         var bytes: Int64 = 0
