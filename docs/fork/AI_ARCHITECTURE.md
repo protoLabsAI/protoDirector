@@ -53,7 +53,11 @@ The gateway model `name` is a **LiteLLM alias** (per protoAgent's pattern) — s
 
 ---
 
-## Change 2 — image generation → gateway (TODO, ~1 wk, low risk)
+## Change 2 — image generation → gateway (superseded)
+
+> **Superseded 2026-07-12** by [GENERATION_GATEWAY_PLAN.md](GENERATION_GATEWAY_PLAN.md)
+> (Phases 1a/1b) + [GATEWAY_CONTRACT.md](GATEWAY_CONTRACT.md) — the gateway's image
+> suite is protoBanana, and the transport plan below predates it. Kept for history.
 
 OpenAI images API is standardized; LiteLLM proxies `POST /v1/images/generations` to 9 providers. The work is
 PalmierPro-side coupling, not the API.
@@ -74,7 +78,11 @@ PalmierPro-side coupling, not the API.
 
 ---
 
-## Change 4 — video generation → gateway (TODO, scope carefully)
+## Change 4 — video generation → gateway (superseded)
+
+> **Superseded 2026-07-12** by [GENERATION_GATEWAY_PLAN.md](GENERATION_GATEWAY_PLAN.md)
+> (Phase 3) — same `/v1/videos` shape, now contract-first with protoBanana's LTX-2
+> pipeline (protoBanana#38) as the primary self-hosted provider. Kept for history.
 
 LiteLLM DOES expose an OpenAI-compatible `POST /v1/videos` (OpenAI/Azure/Gemini-Veo/Vertex-Veo/RunwayML/ModelsLab
 — docs.litellm.ai/docs/videos). It is an **async job**: create → poll `GET /v1/videos/{id}` (queued/in_progress/
