@@ -787,7 +787,12 @@ final class GenerationService {
                 seconds: max(1, p.duration)
             )
             job.size = GatewayGenerationRunner.videoSize(resolution: p.resolution, aspectRatio: p.aspectRatio)
-            job.inputReferenceURL = p.startFrameURL.flatMap { URL(string: $0) }
+            if let source = p.sourceVideoURL {
+                job.inputReferenceURL = URL(string: source)          // extend
+            } else if let start = p.startFrameURL {
+                job.inputReferenceURL = URL(string: start)           // i2v / first-last-frame
+                job.lastFrameURL = p.endFrameURL.flatMap { URL(string: $0) }
+            }
             await runGatewayVideoJob(job, placeholders: placeholders, editor: editor,
                                      onComplete: onComplete, onFailure: onFailure)
         default:
@@ -802,14 +807,14 @@ final class GenerationService {
     /// What the hosted video path offers that the gateway can't map — reject
     /// with a message naming the gap rather than silently dropping inputs.
     nonisolated static func gatewayVideoUnmappable(_ p: VideoGenerationParams) -> String? {
-        if p.sourceVideoURL != nil {
-            return "Video-edit models aren't available through the gateway; pick a text/image-to-video model"
+        if p.sourceVideoURL != nil, p.startFrameURL != nil || p.endFrameURL != nil {
+            return "Pick one: a source video to extend, or start/last frames — not both"
         }
-        if p.endFrameURL != nil {
-            return "End-frame conditioning isn't available through the gateway (first frame only)"
+        if p.endFrameURL != nil, p.startFrameURL == nil {
+            return "first-last-frame needs a start frame alongside the last frame"
         }
         if p.hasAnyReferences {
-            return "Reference media isn't available through the gateway video path (first frame only)"
+            return "Extra reference media isn't available through the gateway video path (use a start frame, last frame, or source clip)"
         }
         return nil
     }

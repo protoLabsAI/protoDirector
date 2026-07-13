@@ -33,7 +33,8 @@ struct GatewayVideoJob: Sendable {
     let prompt: String
     let seconds: Int
     var size: String?
-    var inputReferenceURL: URL?
+    var inputReferenceURL: URL?   // image → i2v first frame; video → extend guide
+    var lastFrameURL: URL?        // image; with an image input_reference → first-last-frame
 }
 
 /// Pure routing: how many references → which op. nil = unmappable.
@@ -160,16 +161,36 @@ enum GatewayGenerationRunner {
         client: OpenAICompatGenerationClient,
         onCreated: @MainActor (String) -> Void
     ) async throws -> URL {
-        var reference: Data?
+        var inputReference: OpenAICompatGenerationClient.VideoInput?
         if let url = job.inputReferenceURL {
-            reference = try preparedImageData(from: url)
+            // A video guide is sent as-is (extend); an image is downscaled to the part cap.
+            inputReference = isVideoReference(url)
+                ? .video(try Data(contentsOf: url))
+                : .image(try preparedImageData(from: url))
+        }
+        var lastFrame: Data?
+        if let url = job.lastFrameURL {
+            guard let ref = job.inputReferenceURL else {
+                throw OpenAICompatGenerationError.api("first-last-frame needs a start frame alongside the last frame")
+            }
+            guard !isVideoReference(ref) else {
+                throw OpenAICompatGenerationError.api("first-last-frame takes two images — the start frame can't be a video")
+            }
+            lastFrame = try preparedImageData(from: url)
         }
         let id = try await client.createVideo(
             model: job.model, prompt: job.prompt, seconds: job.seconds,
-            size: job.size, inputReference: reference
+            size: job.size, inputReference: inputReference, lastFrame: lastFrame
         )
         await onCreated(id)
         return try await pollVideo(id: id, client: client)
+    }
+
+    /// Container extensions the bridge treats as an extend guide rather than a still.
+    static let videoReferenceExtensions: Set<String> = ["mp4", "mov", "m4v", "webm", "avi", "mkv"]
+
+    static func isVideoReference(_ url: URL) -> Bool {
+        videoReferenceExtensions.contains(url.pathExtension.lowercased())
     }
 
     /// Poll loop — also the restart-resume entry (status GETs are stateless).
