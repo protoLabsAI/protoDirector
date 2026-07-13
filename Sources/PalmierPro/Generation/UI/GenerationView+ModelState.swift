@@ -11,10 +11,25 @@ extension GenerationView {
     var imageModel: ImageModelConfig { selectedModel(imageModels, at: selectedImageModelIndex) }
     var audioModel: AudioModelConfig { selectedModel(audioModels, at: selectedAudioModelIndex) }
 
-    var catalogReady: Bool {
-        !videoModels.isEmpty
-            && !imageModels.isEmpty
-            && !audioModels.isEmpty
+    var catalogReady: Bool { !isCatalogEmpty(for: selectedType) }
+
+    func isCatalogEmpty(for type: GenerationType) -> Bool {
+        switch type {
+        case .video: videoModels.isEmpty
+        case .image: imageModels.isEmpty
+        case .audio: audioModels.isEmpty
+        }
+    }
+
+    /// Kinds the current catalog can actually serve (gateway mode may be a subset).
+    var availableTypes: [GenerationType] {
+        GenerationType.allCases.filter { !isCatalogEmpty(for: $0) }
+    }
+
+    func normalizeTypeSelection() {
+        if isCatalogEmpty(for: selectedType), let first = availableTypes.first {
+            selectedType = first
+        }
     }
 
     var aiAllowed: Bool { account.aiAllowed }

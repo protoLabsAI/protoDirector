@@ -116,6 +116,13 @@ struct GatewaySmokeTests {
             _ = try save(try await GatewayGenerationRunner.execute(job, client: client), as: "08-typography")
         }
 
+        // Catalog assembly against the live alias set (Phase 2 acceptance).
+        let entries = try await MainActor.run {
+            try GatewayCatalog.entries(fromTemplate: GatewayCatalog.templateData(), availableAliases: available)
+        }
+        #expect(entries.contains { $0.kind == .image }, "live gateway yields no image catalog entries")
+        print("gateway-smoke catalog: \(entries.map(\.id).joined(separator: ", "))")
+
         print("gateway-smoke outputs: \(outDir.path)")
         if !skipped.isEmpty {
             print("gateway-smoke SKIPPED (alias not on gateway): \(skipped.joined(separator: "; "))")

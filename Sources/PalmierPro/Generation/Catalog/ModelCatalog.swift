@@ -49,7 +49,15 @@ final class ModelCatalog {
     func configure() {
         guard !didConfigure else { return }
         didConfigure = true
+        if AccountService.shared.convex == nil {
+            GatewayCatalog.install(into: self)
+            return
+        }
         startSubscription()
+    }
+
+    func applyGatewayEntries(_ entries: [CatalogEntry]) {
+        apply(entries)
     }
 
     private func startSubscription() {
