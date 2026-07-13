@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 enum ExportDestination: String, CaseIterable, Identifiable {
     case video = "Video"
     case timeline = "Timeline"
-    case palmierProject = "Palmier Project"
+    case palmierProject = "protoDirector Project"
 
     var id: String { rawValue }
 }

@@ -3,7 +3,7 @@ import Foundation
 /// A named directory under ~/Library/Caches/PalmierPro with size/clear helpers.
 struct DiskCache: Sendable {
     static let rootDirectory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("PalmierPro", isDirectory: true)
+        .appendingPathComponent("protoDirector", isDirectory: true)
 
     let directory: URL
 

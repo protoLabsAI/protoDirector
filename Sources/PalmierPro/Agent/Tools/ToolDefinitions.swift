@@ -216,7 +216,7 @@ enum ToolDefinitions {
                         "description": "Exactly one of url, path, bytes, or matte must be set. mimeType is required when bytes is set; for url it acts as a type-inference override.",
                         "properties": [
                             "url": ["type": "string", "description": "HTTPS URL. Pre-signed URLs are fine but must not expire mid-download."],
-                            "path": ["type": "string", "description": "Absolute local file or directory path, readable by the Palmier process. A directory is imported recursively — every openable file is pulled in and the folder structure is replicated as media folders."],
+                            "path": ["type": "string", "description": "Absolute local file or directory path, readable by the protoDirector process. A directory is imported recursively — every openable file is pulled in and the folder structure is replicated as media folders."],
                             "bytes": ["type": "string", "description": "Base64-encoded media data. Prefer url or path for anything over ~10MB."],
                             "matte": [
                                 "type": "object",
@@ -992,7 +992,7 @@ enum ToolDefinitions {
         ),
         AgentTool(
             name: .sendFeedback,
-            description: "Report an agent limitation or bug to the Palmier team so they can improve the product. Use when you can't do what the user asked because a capability or tool is missing or behaves wrong, the result is clearly off, or the user is plainly hitting a rough edge. This sends directly — there is no user confirmation step — so write the report in English and PARAPHRASE in your own words: translate non-English user text to English, and never include verbatim user messages, prompts, file paths, media, transcript text, or any project content. App/OS version and your recent tool names are attached automatically. Use sparingly: at most once per distinct issue.",
+            description: "Report an agent limitation or bug to the protoDirector team so they can improve the product. Use when you can't do what the user asked because a capability or tool is missing or behaves wrong, the result is clearly off, or the user is plainly hitting a rough edge. This sends directly — there is no user confirmation step — so write the report in English and PARAPHRASE in your own words: translate non-English user text to English, and never include verbatim user messages, prompts, file paths, media, transcript text, or any project content. App/OS version and your recent tool names are attached automatically. Use sparingly: at most once per distinct issue.",
             inputSchema: objectSchema(
                 properties: [
                     "category": ["type": "string", "enum": ["missing_capability", "wrong_result", "confusing_ux", "failure", "suggestion"], "description": "What kind of problem this is."],
@@ -1052,7 +1052,7 @@ enum ToolDefinitions {
 
     static let newProject = AgentTool(
         name: .newProject,
-        description: "Create a new empty project in the user's Palmier Pro folder and make it active. Fails if a project with that name already exists — pick another name. Optionally set fps / aspectRatio / quality at creation so the first clips land on the right canvas (same semantics as set_project_settings). Returns the same snapshot as open_project.",
+        description: "Create a new empty project in the user's protoDirector folder and make it active. Fails if a project with that name already exists — pick another name. Optionally set fps / aspectRatio / quality at creation so the first clips land on the right canvas (same semantics as set_project_settings). Returns the same snapshot as open_project.",
         inputSchema: objectSchema(
             properties: [
                 "name": ["type": "string", "description": "Project name (without extension). Defaults to 'Untitled Project'."],

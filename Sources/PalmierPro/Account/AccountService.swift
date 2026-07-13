@@ -398,7 +398,7 @@ final class AccountService {
     ) async throws {
         guard let convex else {
             throw NSError(
-                domain: "Palmier.Feedback",
+                domain: "protoDirector.Feedback",
                 code: -1,
                 userInfo: [NSLocalizedDescriptionKey: "Backend not configured."]
             )

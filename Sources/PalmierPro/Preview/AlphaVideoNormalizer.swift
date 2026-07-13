@@ -81,7 +81,7 @@ enum AlphaVideoNormalizer {
         guard writer.startWriting() else { throw writer.error ?? NormalizeError.writerSetupFailed }
         writer.startSession(atSourceTime: .zero)
 
-        let queue = DispatchQueue(label: "io.palmier.alpha-normalize")
+        let queue = DispatchQueue(label: "studio.protolabs.alpha-normalize")
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             let resumed = OSAllocatedUnfairLock(initialState: false)
             @Sendable func finish(_ result: Result<Void, Error>) {

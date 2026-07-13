@@ -158,7 +158,7 @@ final class TourController {
             TourStep(kind: .spotlight(.element(.skillsButton)), title: "Skills",
                      instruction: "Open Skills to browse community playbooks, create your own, or add them to other agents."),
             TourStep(kind: .outro, title: "You're all set",
-                     instruction: "Start creating, or explore these to get the most out of Palmier Pro."),
+                     instruction: "Start creating, or explore these to get the most out of protoDirector."),
         ]
         return steps
     }

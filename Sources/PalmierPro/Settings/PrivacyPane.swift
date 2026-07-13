@@ -32,7 +32,7 @@ struct PrivacyPane: View {
                 HStack(spacing: AppTheme.Spacing.xs) {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: AppTheme.FontSize.xs, weight: .medium))
-                    Text("Restart Palmier Pro to apply this change.")
+                    Text("Restart protoDirector to apply this change.")
                 }
                 .font(.system(size: AppTheme.FontSize.sm))
                 .foregroundStyle(AppTheme.Text.secondaryColor)
