@@ -96,11 +96,21 @@ cache-nonce'd server-side from day one (protoBanana#39).
 - Contract-first: build against the shape in GATEWAY_CONTRACT.md; a stub server
   in tests until the alias is live.
 
-## Phase 4 — audio + remaining ops (as protoBanana ships them)
+## Phase 4 — audio (ACE-Step) + remaining ops
 
-Music + TTS via `/audio/speech` shape → `AudioGenerationSubmission` routes
-through the runner; dubbing/voice-isolation/upscale via the edits idiom or the
-async job shape, at which point `EditSubmitter` gets its runner seam (seam 4).
+Kicked off with protoLab ([#22](https://github.com/protoLabsAI/protoLab/issues/22));
+contract in [GATEWAY_CONTRACT.md](GATEWAY_CONTRACT.md#audio). ACE-Step 1.5/XL
+music **generation** first — `POST /v1/audio/generations` (JSON, sync-target) →
+a new `generateViaGateway(audioJob:)` + `gatewayGenerateAudio` tool, mirroring
+the image/video runner. Then the edit family (extend / variation / section
+repaint / lyric edit) via `POST /v1/audio/edits` (multipart edits idiom), and
+TTS via `/audio/speech`. Dubbing/lip-sync is the async multi-stage job, later.
+
+Serving home (protoBanana workflow vs. standalone service) and sync-vs-async are
+protoLab's call (#22); the client is built request-first so only the response
+handler (sync bytes vs. submit→poll→content) differs — the async branch reuses
+the video runner. No license gate (local experiments). `EditSubmitter` gets its
+runner seam (seam 4) when the edit ops land.
 
 ## Risks
 

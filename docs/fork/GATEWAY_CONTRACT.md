@@ -3,8 +3,9 @@
 The endpoint contract between protoDirector (the consumer) and our LiteLLM gateway,
 whose media capabilities are served by [protoBanana](https://github.com/protoLabsAI/protoBanana)
 (ComfyUI workflows as OpenAI model names). protoDirector is the primary programmatic
-consumer; changes to this contract are negotiated here and in protoBanana issues
-(video: [protoBanana#38](https://github.com/protoLabsAI/protoBanana/issues/38)).
+consumer; changes to this contract are negotiated here and in backend issues
+(video: [protoBanana#38](https://github.com/protoLabsAI/protoBanana/issues/38);
+audio: [protoLab#22](https://github.com/protoLabsAI/protoLab/issues/22)).
 
 Companion implementation plan: [GENERATION_GATEWAY_PLAN.md](GENERATION_GATEWAY_PLAN.md).
 
@@ -18,7 +19,8 @@ Companion implementation plan: [GENERATION_GATEWAY_PLAN.md](GENERATION_GATEWAY_P
 3. **Model aliases are configuration**, not code. protoDirector ships alias
    settings with `protolabs/*` defaults; swapping models is a gateway-config edit.
 4. **Discovery via `/model/info`**: `model_name` + `model_info.mode`
-   (`chat` | `image_generation` | `video_generation` | `audio_speech`).
+   (`chat` | `image_generation` | `video_generation` | `music_generation` |
+   `audio_speech`).
    Capability caps (durations, sizes) are client-side per alias family until the
    gateway can publish them.
 
@@ -107,15 +109,77 @@ cannot, hence the bridge. The client contract is unchanged either way.
 server-side from the start on the video path (the protoBanana#39 nonce
 mechanism); a client seed is only ever an explicit user pin.
 
-## Audio — FUTURE
+## Audio — PROPOSED ([protoLab#22](https://github.com/protoLabsAI/protoLab/issues/22), 2026-07-13)
 
-- **TTS / voiceover**: standard `/v1/audio/speech` → audio bytes.
-- **Music**: same shape — `{model, input: <prompt or lyrics>, extra_body:
-  {duration_s, instrumental, style}}` → audio bytes. Maps onto the editor's
-  existing `AudioCaps` (lyrics, instrumental, durations).
-- **Dubbing / voice isolation**: edits idiom — multipart input media +
-  instruction fields; async job shape (as video) when runtime scales with input
-  duration.
+Music generation via **ACE-Step 1.5/XL** (MIT, ComfyUI-native — see
+[AUDIO_DUBBING_RESEARCH.md](AUDIO_DUBBING_RESEARCH.md)) plus its edit family. TTS
+reuses OpenAI's native `/v1/audio/speech`. *Where* and *how* this is served —
+protoBanana ComfyUI workflow vs. a standalone ACE-Step service, and sync vs.
+async — is being settled with protoLab; the client contract below is independent
+of both, exactly as the video contract preceded the bridge.
+
+**Sync vs async — OPEN.** The sync shape below is the *target*: ACE-Step runs at
+~real-time on the RTX PRO 6000, so bytes-in-one-call is viable (unlike video).
+But the request fields are identical either way — if protoLab serves it async
+(long-form batching, a shared ComfyUI queue, or just preferring the uniform job
+pattern), the same `(model, prompt, lyrics, seconds, seed, …)` moves onto the
+async `/v1/videos`-style **submit → poll → content** envelope and reuses the
+video runner. The client is built request-first so only the response handler
+differs; picking sync or async is a protoLab call, not a re-contract.
+
+### `POST /v1/audio/generations` (JSON, sync)
+`model`, `prompt` (style / genre / mood), `lyrics` (optional; `[Verse]` /
+`[Chorus]` tags), `instrumental` (bool), `seconds` (target length), `n`
+(variations), `seed`, `negative_prompt`, `response_format: "b64_json"` (gateway
+does not host results), `format` ("mp3" | "wav" | "flac"). Response:
+`{data: [{b64_json, seed, duration_s}], format}`. Maps directly onto the editor's
+existing `AudioGenerationParams` (prompt, lyrics, instrumental, durationSeconds).
+
+Variation / retake is this endpoint with a fresh `seed` (or `n > 1`) — not a
+separate op.
+
+### `POST /v1/audio/edits` (multipart, sync)
+Parts: `audio` (required input clip), optional `reference_audio` (voice / style
+transfer). Fields: `model`, `prompt`, `lyrics`, `seed`, plus per-op extras:
+
+| Op (alias family) | Extra fields |
+|---|---|
+| extend / continue (`ace-step-extend`) | `seconds` = target total length; `direction` ("append" \| "prepend") |
+| section repaint (`ace-step-repaint`) | `start_s`, `end_s` (region to regenerate), `variance` (0–1) |
+| lyric / style edit (`ace-step-edit`) | new `lyrics` / `prompt`, `edit_strength` (0–1) |
+
+Response: the same `{data: [{b64_json, ...}]}` shape.
+
+### TTS — `POST /v1/audio/speech` (OpenAI-native, sync)
+`model`, `input` (text to speak), `voice`, `response_format` → audio bytes.
+Voice-clone TTS (TTS-Audio-Suite engines) rides the same endpoint with a
+`reference_audio` extra field once exposed. No license gate — local experiments.
+
+### Dubbing / lip-sync — async job (as video) when it lands
+Multi-stage (ASR on-device → translate via a gateway LLM → voice-clone TTS →
+optional LatentSync). Runtime scales with input duration, so this one takes the
+async `/v1/videos`-style submit / poll / content shape, **not** sync. Out of the
+first pass; tracked with protoLab separately.
+
+### Discovery
+`/model/info` `mode` gains `music_generation` (covers `/audio/generations` +
+`/audio/edits`) alongside the existing `audio_speech`. Client caps (durations,
+formats, voices) stay per-alias until the gateway publishes them.
+
+### Client obligations (audio)
+- **Cache-bust like the image/video path**: ACE-Step runs in ComfyUI, so an
+  identical `(model, prompt, lyrics, seconds, seed)` hits the execution cache
+  ([protoBanana#34](https://github.com/protoLabsAI/protoBanana/issues/34)).
+  Server-side per-submission nonce is preferred (the protoBanana#39 pattern);
+  until then the client defaults `seed` to a fresh random unless the user pins
+  one — the same transitional rule as images.
+- **Form-part cap — OPEN**: the image path caps multipart parts at 1 MB, but an
+  input clip for `/audio/edits` routinely exceeds that (a 2-min WAV ≈ 20 MB). The
+  audio-edits path needs a larger part cap or a different upload channel — to
+  settle with protoLab.
+- **b64 response bound**: base64-in-JSON is fine for the coherent-length target
+  (≤ ~5 min); if long-form music ever needs 50 MB+ payloads, that alias moves to
+  the async bytes-download shape (as video), not sync JSON.
 
 ## Upscale — FUTURE
 
