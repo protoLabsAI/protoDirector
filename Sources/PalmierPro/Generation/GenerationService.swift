@@ -816,6 +816,45 @@ final class GenerationService {
 
     static let gatewayVideoJobPrefix = "gateway-video:"
 
+    /// Entry point for gateway video jobs (text/image-to-video via the LTX
+    /// bridge). Creates one video placeholder, then hands the job to
+    /// GatewayGenerationRunner.executeVideo; the clip lands through the same
+    /// finalizeSuccess as hosted jobs. Returns the placeholder id.
+    func generateViaGateway(
+        videoJob job: GatewayVideoJob,
+        name: String?,
+        folderId: String?,
+        projectURL: URL?,
+        editor: EditorViewModel,
+        onComplete: (@MainActor (MediaAsset) -> Void)? = nil,
+        onFailure: (@MainActor () -> Void)? = nil
+    ) -> String {
+        var genInput = GenerationInput(
+            prompt: job.prompt, model: job.model, duration: job.seconds,
+            aspectRatio: "", resolution: job.size, quality: nil
+        )
+        genInput.createdAt = Date()
+
+        let resolvedFolderId = folderId.flatMap { id in
+            editor.folder(id: id) != nil ? id : nil
+        }
+        let destDir = Self.destinationDirectory(for: projectURL)
+        let baseName = name ?? String(job.prompt.prefix(30))
+        let placeholder = createPlaceholder(
+            type: .video, name: baseName, duration: Double(max(1, job.seconds)),
+            genInput: genInput, folderId: resolvedFolderId,
+            destDir: destDir, fileExtension: "mp4", editor: editor
+        )
+        placeholder.generationStatus = .generating
+
+        Task { @MainActor [weak self, weak editor] in
+            guard let self, let editor else { return }
+            await self.runGatewayVideoJob(job, placeholders: [placeholder], editor: editor,
+                                          onComplete: onComplete, onFailure: onFailure)
+        }
+        return placeholder.id
+    }
+
     private func runGatewayVideoJob(
         _ job: GatewayVideoJob,
         placeholders: [MediaAsset],

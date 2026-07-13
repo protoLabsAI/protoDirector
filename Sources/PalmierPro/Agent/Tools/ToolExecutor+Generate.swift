@@ -41,6 +41,9 @@ extension ToolExecutor {
         case .sequence:
             throw ToolError("Cannot generate a sequence. Sequences are timelines.")
         case .video:
+            if OpenAICompatGenerationClient.gatewayConfigured {
+                return try gatewayGenerateVideo(editor, args, prompt: prompt)
+            }
             let modelId = try args.string("model") ?? defaultModelId(
                 VideoModelConfig.allModels.map { (id: $0.id, paidOnly: $0.paidOnly) }, kind: "video")
             guard let model = VideoModelConfig.allModels.first(where: { $0.id == modelId }) else {
@@ -175,6 +178,52 @@ extension ToolExecutor {
             ? ", refs: \(imageRefCount)img/\(videoRefCount)vid/\(audioRefCount)aud"
             : ""
         return .ok("Generation started. Placeholder asset ID: \(placeholderId). Model: \(model.displayName), duration: \(duration)s, aspect: \(aspectRatio)\(refSummary)")
+    }
+
+    /// generate_video when the gateway is configured: text- or image-to-video
+    /// through the LTX bridge. Source-video edits and end-frame conditioning
+    /// aren't mappable to the bridge contract, so they're rejected by name.
+    private func gatewayGenerateVideo(
+        _ editor: EditorViewModel, _ args: [String: Any], prompt: String
+    ) throws -> ToolResult {
+        guard !prompt.isEmpty else { throw ToolError("Empty prompt") }
+        if args.string("sourceVideoMediaRef") != nil {
+            throw ToolError("Video-edit models aren't available through the gateway; generate from a text prompt or a start frame.")
+        }
+        if args.string("endFrameMediaRef") != nil {
+            throw ToolError("End-frame conditioning isn't available through the gateway — first frame only.")
+        }
+        let duration = max(1, args.int("duration") ?? 5)
+        var job = GatewayVideoJob(
+            model: args.string("model") ?? GatewayVideoModels.resolve(GatewayVideoModels.gen),
+            prompt: prompt,
+            seconds: duration
+        )
+        job.size = GatewayGenerationRunner.videoSize(
+            resolution: args.string("resolution"), aspectRatio: args.string("aspectRatio")
+        )
+        var startFrame: [MediaAsset] = []
+        if let startRef = args.string("startFrameMediaRef") {
+            let a = try asset(startRef, editor: editor, label: "Start frame")
+            guard a.type == .image else {
+                throw ToolError("startFrameMediaRef '\(startRef)' must be an image asset (got \(a.type.rawValue)).")
+            }
+            guard FileManager.default.fileExists(atPath: a.url.path) else {
+                throw ToolError("startFrameMediaRef '\(startRef)' has no file on disk yet — it may still be generating. Poll get_media first.")
+            }
+            job.inputReferenceURL = a.url
+            startFrame = [a]
+        }
+        let folderId = try resolveFolder(args, editor: editor, fallbackReferences: startFrame)
+        let placeholderId = editor.generationService.generateViaGateway(
+            videoJob: job,
+            name: args.string("name"),
+            folderId: folderId,
+            projectURL: editor.projectURL,
+            editor: editor
+        )
+        let anchor = job.inputReferenceURL != nil ? " (image-to-video)" : ""
+        return .ok("Generation started. Placeholder asset ID: \(placeholderId). Model: \(job.model), duration: \(duration)s\(anchor). Poll get_media with this id; the result lands as a video asset.")
     }
 
     private func generateImage(
@@ -486,6 +535,14 @@ extension ToolExecutor {
             var info: [String: Any] = ["id": model.id, "type": type]
             if let mode = model.mode { info["mode"] = mode }
             out.append(info)
+        }
+        // The video model is served by the bridge, not LiteLLM, so it never
+        // appears in /v1/models — inject it so the agent knows it exists.
+        if filter == nil || filter?.isEmpty == true || filter == "video" {
+            let videoId = GatewayVideoModels.resolve(GatewayVideoModels.gen)
+            if !out.contains(where: { ($0["id"] as? String) == videoId }) {
+                out.append(["id": videoId, "type": "video", "mode": "video_generation"])
+            }
         }
         let body: [String: Any] = ["models": out, "loaded": true, "source": "gateway"]
         guard let json = Self.jsonString(body) else {
