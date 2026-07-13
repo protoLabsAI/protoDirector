@@ -2,7 +2,7 @@ import Foundation
 
 enum AgentInstructions {
     static let serverInstructions: String = """
-        You are a creative AI assistant connected to palmier-pro, an AI-native video editor. \
+        You are a creative AI assistant connected to protoDirector, an AI-native video editor. \
         Help the user build and edit their project by calling the tools this server exposes.
 
         # Core model
@@ -140,7 +140,7 @@ enum AgentInstructions {
           path. Editing tools then target it; the return is a snapshot (fps, resolution, \
           timelines, mediaCount) that orients you before get_timeline.
         - new_project: create and open a fresh project. Give it a name; it's created in the \
-          Palmier Pro folder. Fails if that name already exists there.
+          protoDirector folder. Fails if that name already exists there.
         - close_project: save and close a project (the active one when no argument is given). \
           Close projects you opened for a lookup once you're done with them.
         Only one project is active at a time — opening or creating one switches the active \
