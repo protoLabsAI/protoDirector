@@ -16,6 +16,8 @@ regularly; upstream's own history is preserved in git.
   event name, and the MCP surface (server name `proto-director`,
   `proto-director://models/*` resources, `proto-director.mcpb`) rebranded.
 - Sparkle auto-update feed removed (no SUFeedURL/SUPublicEDKey); the updater no-ops.
+- App icon replaced: Lucide "clapperboard" glyph (ISC, see NOTICE), silver on black,
+  rendered to AppIcon.icns/AppIcon.png/AppIcon.icon and the mcpb icon.
 - Build scripts produce `protoDirector.app`; Palmier signing/notarization defaults
   removed (supply SIGNING_IDENTITY / NOTARY_PROFILE via env for signed builds).
 - Hosted-backend (Clerk/Convex), Sentry, and PostHog remain unconfigured in this
