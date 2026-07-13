@@ -134,23 +134,47 @@ struct OpenAICompatGenerationClient: Sendable {
         var isTerminal: Bool { status == "completed" || status == "failed" }
     }
 
-    /// POST /videos — returns the job id. JSON without a reference; multipart
-    /// with `input_reference` (first-frame conditioning) when one is given.
+    /// The `input_reference` upload — an image conditions the first frame (i2v)
+    /// or the start of a first-last-frame run; a video is the guide the bridge
+    /// continues (extend). The bridge routes purely on the container type.
+    enum VideoInput: Sendable, Equatable {
+        case image(Data)
+        case video(Data)
+
+        var part: MultipartPart {
+            switch self {
+            case .image(let data):
+                return .init(name: "input_reference", filename: "reference.png",
+                             contentType: "image/png", data: data)
+            case .video(let data):
+                return .init(name: "input_reference", filename: "reference.mp4",
+                             contentType: "video/mp4", data: data)
+            }
+        }
+    }
+
+    /// POST /videos — returns the job id. JSON for plain text-to-video; multipart
+    /// when a reference is supplied. Routing is on the upload(s): image
+    /// `input_reference` → i2v; video `input_reference` → extend; `input_reference`
+    /// + `last_frame` (both images) → first-last-frame (GATEWAY_CONTRACT.md).
     func createVideo(
         model: String, prompt: String, seconds: Int, size: String?,
-        inputReference: Data? = nil
+        inputReference: VideoInput? = nil,
+        lastFrame: Data? = nil
     ) async throws -> String {
         var req: URLRequest
-        if let inputReference {
+        if inputReference != nil || lastFrame != nil {
             let boundary = "pd-\(UUID().uuidString)"
             req = request(path: "videos", contentType: "multipart/form-data; boundary=\(boundary)")
             var fields = ["model": model, "prompt": prompt, "seconds": String(seconds)]
             if let size, !size.isEmpty { fields["size"] = size }
-            req.httpBody = Self.multipartBody(
-                boundary: boundary, fields: fields,
-                parts: [.init(name: "input_reference", filename: "reference.png",
-                              contentType: "image/png", data: inputReference)]
-            )
+            var parts: [MultipartPart] = []
+            if let inputReference { parts.append(inputReference.part) }
+            if let lastFrame {
+                parts.append(.init(name: "last_frame", filename: "last_frame.png",
+                                   contentType: "image/png", data: lastFrame))
+            }
+            req.httpBody = Self.multipartBody(boundary: boundary, fields: fields, parts: parts)
         } else {
             req = request(path: "videos", contentType: "application/json")
             var body: [String: Any] = ["model": model, "prompt": prompt, "seconds": String(seconds)]

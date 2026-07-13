@@ -4,7 +4,7 @@ import Testing
 
 /// URLProtocol stub scripting the bridge's three video URLs.
 final class VideoBridgeStub: URLProtocol {
-    struct Call: Sendable { let method: String; let path: String; let contentType: String? }
+    struct Call: Sendable { let method: String; let path: String; let contentType: String?; let body: String }
     nonisolated(unsafe) static var calls: [Call] = []
     nonisolated(unsafe) static var statusScript: [String] = []   // consumed per GET /videos/{id}
     nonisolated(unsafe) static var videoBytes = Data("MP4BYTES".utf8)
@@ -21,12 +21,29 @@ final class VideoBridgeStub: URLProtocol {
     }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
+    /// URLSession hands a custom URLProtocol the body as a stream, not httpBody —
+    /// drain it so multipart parts are assertable. Binary parts decode lossily,
+    /// which is fine for substring checks on the ASCII headers.
+    static func bodyString(_ request: URLRequest) -> String {
+        if let b = request.httpBody { return String(decoding: b, as: UTF8.self) }
+        guard let stream = request.httpBodyStream else { return "" }
+        stream.open(); defer { stream.close() }
+        var data = Data(); var buf = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable {
+            let n = stream.read(&buf, maxLength: buf.count)
+            if n <= 0 { break }
+            data.append(buf, count: n)
+        }
+        return String(decoding: data, as: UTF8.self)
+    }
+
     override func startLoading() {
         Self.lock.lock()
         let path = request.url?.path ?? ""
         Self.calls.append(.init(
             method: request.httpMethod ?? "?", path: path,
-            contentType: request.value(forHTTPHeaderField: "content-type")
+            contentType: request.value(forHTTPHeaderField: "content-type"),
+            body: Self.bodyString(request)
         ))
         let (status, body): (Int, Data)
         if request.httpMethod == "POST", path.hasSuffix("/videos") {
@@ -125,18 +142,87 @@ struct GatewayVideoTests {
     }
 
     @Test func unmappableHostedParamsAreNamed() {
-        let source = VideoGenerationParams(
+        // extend (source video alone) and first-last-frame (start + end) are now mappable.
+        let extend = VideoGenerationParams(
             prompt: "p", duration: 5, aspectRatio: "16:9", resolution: nil, sourceVideoURL: "file:///v.mp4")
-        #expect(GenerationService.gatewayVideoUnmappable(source)?.contains("Video-edit") == true)
-        let endFrame = VideoGenerationParams(
+        #expect(GenerationService.gatewayVideoUnmappable(extend) == nil)
+        let flf = VideoGenerationParams(
+            prompt: "p", duration: 5, aspectRatio: "16:9", resolution: nil,
+            startFrameURL: "file:///s.png", endFrameURL: "file:///e.png")
+        #expect(GenerationService.gatewayVideoUnmappable(flf) == nil)
+        // Still rejected: source video mixed with frames, a lone last frame, extra refs.
+        let both = VideoGenerationParams(
+            prompt: "p", duration: 5, aspectRatio: "16:9", resolution: nil,
+            sourceVideoURL: "file:///v.mp4", startFrameURL: "file:///s.png")
+        #expect(GenerationService.gatewayVideoUnmappable(both)?.contains("Pick one") == true)
+        let loneEnd = VideoGenerationParams(
             prompt: "p", duration: 5, aspectRatio: "16:9", resolution: nil, endFrameURL: "file:///f.png")
-        #expect(GenerationService.gatewayVideoUnmappable(endFrame)?.contains("End-frame") == true)
+        #expect(GenerationService.gatewayVideoUnmappable(loneEnd)?.contains("first-last-frame") == true)
         let refs = VideoGenerationParams(
             prompt: "p", duration: 5, aspectRatio: "16:9", resolution: nil, referenceImageURLs: ["file:///r.png"])
-        #expect(GenerationService.gatewayVideoUnmappable(refs)?.contains("Reference media") == true)
-        let clean = VideoGenerationParams(
+        #expect(GenerationService.gatewayVideoUnmappable(refs)?.contains("reference media") == true)
+        let i2v = VideoGenerationParams(
             prompt: "p", duration: 5, aspectRatio: "16:9", resolution: nil, startFrameURL: "file:///s.png")
-        #expect(GenerationService.gatewayVideoUnmappable(clean) == nil)
+        #expect(GenerationService.gatewayVideoUnmappable(i2v) == nil)
+    }
+
+    @Test func videoInputPartShapes() {
+        let img = OpenAICompatGenerationClient.VideoInput.image(Data([0x89, 0x50])).part
+        #expect(img.name == "input_reference" && img.filename == "reference.png" && img.contentType == "image/png")
+        let vid = OpenAICompatGenerationClient.VideoInput.video(Data("ftyp".utf8)).part
+        #expect(vid.name == "input_reference" && vid.filename == "reference.mp4" && vid.contentType == "video/mp4")
+    }
+
+    @Test func isVideoReferenceByExtension() {
+        #expect(GatewayGenerationRunner.isVideoReference(URL(fileURLWithPath: "/a/clip.MOV")))
+        #expect(GatewayGenerationRunner.isVideoReference(URL(fileURLWithPath: "/a/clip.mp4")))
+        #expect(!GatewayGenerationRunner.isVideoReference(URL(fileURLWithPath: "/a/frame.png")))
+    }
+
+    @Test func extendSendsVideoGuideAsMultipart() async throws {
+        VideoBridgeStub.reset(script: ["completed"])
+        let clip = FileManager.default.temporaryDirectory.appendingPathComponent("src-\(UUID().uuidString).mov")
+        try Data("ftypqt  moovtrak".utf8).write(to: clip)
+        defer { try? FileManager.default.removeItem(at: clip) }
+        var job = GatewayVideoJob(model: "protolabs/ltx2-video", prompt: "continue the shot", seconds: 6)
+        job.inputReferenceURL = clip
+        let url = try await GatewayGenerationRunner.executeVideo(job, client: Self.stubClient) { _ in }
+        try? FileManager.default.removeItem(at: url)
+        let create = try #require(VideoBridgeStub.calls.first)
+        #expect(create.contentType?.hasPrefix("multipart/form-data") == true)
+        #expect(create.body.contains(#"filename="reference.mp4""#), "extend must send the guide as a video part")
+        #expect(create.body.contains("video/mp4"))
+        #expect(!create.body.contains(#"name="last_frame""#), "extend has no last frame")
+    }
+
+    @Test func firstLastFrameSendsBothImageParts() async throws {
+        VideoBridgeStub.reset(script: ["completed"])
+        let dir = FileManager.default.temporaryDirectory
+        let start = dir.appendingPathComponent("s-\(UUID().uuidString).png")
+        let end = dir.appendingPathComponent("e-\(UUID().uuidString).png")
+        try Data([0x89, 0x50, 0x4E, 0x47]).write(to: start)
+        try Data([0x89, 0x50, 0x4E, 0x47]).write(to: end)
+        defer { try? FileManager.default.removeItem(at: start); try? FileManager.default.removeItem(at: end) }
+        var job = GatewayVideoJob(model: "protolabs/ltx2-video", prompt: "interpolate", seconds: 4)
+        job.inputReferenceURL = start
+        job.lastFrameURL = end
+        let url = try await GatewayGenerationRunner.executeVideo(job, client: Self.stubClient) { _ in }
+        try? FileManager.default.removeItem(at: url)
+        let create = try #require(VideoBridgeStub.calls.first)
+        #expect(create.body.contains(#"name="input_reference""#))
+        #expect(create.body.contains(#"name="last_frame""#), "first-last-frame must send both frames")
+    }
+
+    @Test func loneLastFrameIsRejected() async throws {
+        VideoBridgeStub.reset(script: ["completed"])
+        let end = FileManager.default.temporaryDirectory.appendingPathComponent("e-\(UUID().uuidString).png")
+        try Data([0x89, 0x50, 0x4E, 0x47]).write(to: end)
+        defer { try? FileManager.default.removeItem(at: end) }
+        var job = GatewayVideoJob(model: "protolabs/ltx2-video", prompt: "x", seconds: 4)
+        job.lastFrameURL = end
+        await #expect(throws: OpenAICompatGenerationError.self) {
+            _ = try await GatewayGenerationRunner.executeVideo(job, client: Self.stubClient) { _ in }
+        }
     }
 
     @Test func videoSizeMapping() {
