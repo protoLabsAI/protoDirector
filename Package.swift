@@ -48,6 +48,7 @@ let package = Package(
                 .copy("Resources/MCPB/proto-director.mcpb"),
                 .copy("Resources/Images"),
                 .copy("Resources/Changelog"),
+                .copy("Resources/GatewayCatalog"),
                 .copy("Resources/Localization"),
                 .copy("Resources/Models"),
             ],

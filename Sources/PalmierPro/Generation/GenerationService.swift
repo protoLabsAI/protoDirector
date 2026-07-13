@@ -72,6 +72,24 @@ final class GenerationService {
         let primaryId = placeholders[0].id
 
         Task { @MainActor in
+            // Gateway path: references stay local files; no Convex upload/job.
+            if OpenAICompatGenerationClient.gatewayConfigured, assetType == .image {
+                var storedInput = genInput
+                let localRefs = references.map(\.url.absoluteString)
+                storedInput.imageURLs = localRefs.isEmpty ? nil : localRefs
+                if storedInput.createdAt == nil { storedInput.createdAt = Date() }
+                for (outputIndex, placeholder) in placeholders.enumerated() {
+                    var si = storedInput
+                    si.outputIndex = outputIndex
+                    updateGenerationMetadata(placeholder, editor: editor) { input in input = si }
+                }
+                await self.runGatewayPanelJob(
+                    params: buildParams(localRefs), genInput: storedInput,
+                    placeholders: placeholders, editor: editor,
+                    onComplete: onComplete, onFailure: onFailure
+                )
+                return
+            }
             do {
                 let prepared = try await self.prepareReferences(
                     references: references,
@@ -679,29 +697,81 @@ final class GenerationService {
 
         Task { @MainActor [weak self, weak editor] in
             guard let self, let editor else { return }
-            guard let client = OpenAICompatGenerationClient.fromGateway() else {
+            await self.runGatewayImageJob(job, placeholders: placeholders, editor: editor,
+                                          onComplete: onComplete, onFailure: onFailure)
+        }
+        return primaryId
+    }
+
+    /// Shared gateway execution: run the job, finalize into the placeholders.
+    private func runGatewayImageJob(
+        _ job: GatewayImageJob,
+        placeholders: [MediaAsset],
+        editor: EditorViewModel,
+        onComplete: (@MainActor (MediaAsset) -> Void)?,
+        onFailure: (@MainActor () -> Void)?
+    ) async {
+        guard let client = OpenAICompatGenerationClient.fromGateway() else {
+            for placeholder in placeholders {
+                updateGenerationMetadata(placeholder, editor: editor, status: .failed("Gateway not configured"))
+            }
+            onFailure?()
+            return
+        }
+        do {
+            let urls = try await GatewayGenerationRunner.execute(job, client: client)
+            await finalizeSuccess(
+                urlStrings: urls.map(\.absoluteString),
+                placeholders: placeholders, editor: editor,
+                onComplete: onComplete, onFailure: onFailure
+            )
+        } catch {
+            let message = error.localizedDescription
+            Log.generation.error("gateway image job failed model=\(job.model) error=\(message)")
+            for placeholder in placeholders {
+                updateGenerationMetadata(placeholder, editor: editor, status: .failed(message))
+            }
+            onFailure?()
+        }
+    }
+
+    /// Panel/tool submits arriving through generate(): map the Convex-shaped
+    /// params (built with LOCAL file paths) onto a gateway job.
+    private func runGatewayPanelJob(
+        params: BackendGenerationParams,
+        genInput: GenerationInput,
+        placeholders: [MediaAsset],
+        editor: EditorViewModel,
+        onComplete: (@MainActor (MediaAsset) -> Void)?,
+        onFailure: (@MainActor () -> Void)?
+    ) async {
+        switch params {
+        case .image(let p):
+            let refURLs = p.imageURLs.compactMap { URL(string: $0) }
+            guard let op = GatewayImageRouting.op(forReferenceCount: refURLs.count) else {
                 for placeholder in placeholders {
-                    self.updateGenerationMetadata(placeholder, editor: editor, status: .failed("Gateway not configured"))
+                    updateGenerationMetadata(placeholder, editor: editor,
+                        status: .failed("The gateway takes at most 3 reference images (got \(refURLs.count))"))
                 }
                 onFailure?()
                 return
             }
-            do {
-                let urls = try await GatewayGenerationRunner.execute(job, client: client)
-                await self.finalizeSuccess(
-                    urlStrings: urls.map(\.absoluteString),
-                    placeholders: placeholders, editor: editor,
-                    onComplete: onComplete, onFailure: onFailure
-                )
-            } catch {
-                let message = error.localizedDescription
-                Log.generation.error("gateway image job failed model=\(job.model) error=\(message)")
-                for placeholder in placeholders {
-                    self.updateGenerationMetadata(placeholder, editor: editor, status: .failed(message))
-                }
-                onFailure?()
+            var job = GatewayImageJob(
+                op: op,
+                model: op == .compose ? GatewayImageModels.resolve(GatewayImageModels.chat) : genInput.model,
+                prompt: p.prompt
+            )
+            job.size = GatewayGenerationRunner.size(resolution: p.resolution, aspectRatio: p.aspectRatio)
+            job.n = op == .generate ? placeholders.count : 1
+            job.referenceURLs = refURLs
+            await runGatewayImageJob(job, placeholders: placeholders, editor: editor,
+                                     onComplete: onComplete, onFailure: onFailure)
+        default:
+            for placeholder in placeholders {
+                updateGenerationMetadata(placeholder, editor: editor,
+                    status: .failed("This generation type isn't available through the gateway yet"))
             }
+            onFailure?()
         }
-        return primaryId
     }
 }

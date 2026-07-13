@@ -1,0 +1,70 @@
+[
+  {
+    "id": "protolabs/qwen-image",
+    "kind": "image",
+    "displayName": "Qwen Image",
+    "allowedEndpoints": ["generate"],
+    "responseShape": "images",
+    "paidOnly": false,
+    "uiCapabilities": {
+      "resolutions": null,
+      "aspectRatios": ["1:1", "16:9", "9:16", "4:3", "3:4"],
+      "qualities": null,
+      "supportsImageReference": true,
+      "maxImages": 4
+    }
+  },
+  {
+    "id": "protolabs/qwen-image-turbo",
+    "kind": "image",
+    "displayName": "Qwen Image Turbo",
+    "allowedEndpoints": ["generate"],
+    "responseShape": "images",
+    "paidOnly": false,
+    "uiCapabilities": {
+      "resolutions": null,
+      "aspectRatios": ["1:1", "16:9", "9:16", "4:3", "3:4"],
+      "qualities": null,
+      "supportsImageReference": true,
+      "maxImages": 4
+    }
+  },
+  {
+    "id": "protolabs/ideogram-4",
+    "kind": "image",
+    "displayName": "Ideogram 4 (Typography)",
+    "allowedEndpoints": ["generate"],
+    "responseShape": "images",
+    "paidOnly": false,
+    "uiCapabilities": {
+      "resolutions": null,
+      "aspectRatios": ["1:1", "16:9", "9:16", "4:3", "3:4"],
+      "qualities": null,
+      "supportsImageReference": false,
+      "maxImages": 4
+    }
+  },
+  {
+    "id": "protolabs/ltx2-video",
+    "kind": "video",
+    "displayName": "LTX-2 Video",
+    "allowedEndpoints": ["generate"],
+    "responseShape": "video",
+    "paidOnly": false,
+    "uiCapabilities": {
+      "durations": [4, 6, 8, 10],
+      "resolutions": ["1216x704", "704x1216", "1024x1024"],
+      "aspectRatios": ["16:9", "9:16", "1:1"],
+      "supportsFirstFrame": true,
+      "supportsLastFrame": false,
+      "maxReferenceImages": 0,
+      "maxReferenceVideos": 0,
+      "maxReferenceAudios": 0,
+      "maxTotalReferences": 0,
+      "framesAndReferencesExclusive": false,
+      "referenceTagNoun": "reference",
+      "requiresSourceVideo": false,
+      "requiresReferenceImage": false
+    }
+  }
+]

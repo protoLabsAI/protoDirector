@@ -135,6 +135,20 @@ enum GatewayGenerationRunner {
         return out as Data
     }
 
+    /// Qwen-Image native buckets per aspect ratio (protoBanana snaps arbitrary
+    /// sizes, but native buckets skip the snap).
+    static let aspectSizes: [String: String] = [
+        "1:1": "1328x1328", "16:9": "1664x928", "9:16": "928x1664",
+        "4:3": "1472x1140", "3:4": "1140x1472",
+    ]
+
+    /// Explicit WxH wins; else map the aspect ratio; else let the model pick.
+    static func size(resolution: String?, aspectRatio: String?) -> String? {
+        if let explicit = sizeParameter(resolution: resolution) { return explicit }
+        guard let aspectRatio else { return nil }
+        return aspectSizes[aspectRatio.trimmingCharacters(in: .whitespaces)]
+    }
+
     /// "WxH" passthrough for /images/generations; nil lets the model pick.
     static func sizeParameter(resolution: String?) -> String? {
         guard let r = resolution?.trimmingCharacters(in: .whitespacesAndNewlines),

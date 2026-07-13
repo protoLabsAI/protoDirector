@@ -20,7 +20,7 @@ extension ToolExecutor {
                 model: args.string("model") ?? GatewayImageModels.resolve(GatewayImageModels.gen),
                 prompt: prompt
             )
-            job.size = GatewayGenerationRunner.sizeParameter(resolution: args.string("resolution"))
+            job.size = GatewayGenerationRunner.size(resolution: args.string("resolution"), aspectRatio: args.string("aspectRatio"))
             job.n = max(1, min(4, args.int("numImages") ?? 1))
             job.seed = args.int("seed")
             return try startGatewayImageJob(job, args, editor: editor, refs: refs)

@@ -137,6 +137,8 @@ struct GenerationView: View {
                 catalogLoadingView
             }
         }
+        .onAppear { normalizeTypeSelection() }
+        .onChange(of: availableTypes) { _, _ in normalizeTypeSelection() }
     }
 
     private var catalogLoadingView: some View {
