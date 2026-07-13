@@ -57,17 +57,24 @@ The only channel accepting 2–3 reference images (multi-ref compose). Images as
 
 ### Client obligations (images)
 - Downscale any multipart part to **≤ 1 MB** before sending (gateway form-part cap).
-- Default `seed` to a fresh random value when the user doesn't pin one —
-  identical resubmission hits ComfyUI's execution cache and returns empty
-  outputs ([protoBanana#34](https://github.com/protoLabsAI/protoBanana/issues/34)).
+- Transitional: default `seed` to a fresh random value when the user doesn't
+  pin one — identical resubmission hits ComfyUI's execution cache and returns
+  empty outputs ([protoBanana#34](https://github.com/protoLabsAI/protoBanana/issues/34)).
+  [protoBanana#39](https://github.com/protoLabsAI/protoBanana/pull/39) moves this
+  server-side (per-submission nonce); once deployed, this obligation is void
+  (the random default is harmless and may remain).
 - Never auto-retry a flat-gray Ideogram result (built-in stochastic refusal);
   surface it and let the user reword.
 
-## Video — PROPOSED (LTX-2, protoBanana#38 piece 2)
+## Video — AGREED (protoBanana#38, 2026-07-13)
 
-Adopt the OpenAI-compatible async video shape LiteLLM already defines
-(docs.litellm.ai/docs/videos), so `protobanana/ltx2-*`, `sora-2`, and `veo-3`
-aliases are indistinguishable to the client:
+The OpenAI-compatible async video shape, confirmed by the lab side. Server-side
+it is implemented by a standalone **video bridge** co-located with ComfyUI on
+protolabs (LiteLLM 1.83.14 cannot host it: no CustomLLM video hook, and the
+native /v1/videos router shadows passthrough while whitelisting only hosted
+providers). The edge proxy routes `/v1/videos*` to the bridge — same base URL,
+same key, so `protobanana/ltx2-*` and future hosted `sora-2`/`veo-*` aliases
+stay indistinguishable to the client:
 
 ```
 POST /v1/videos            {model, prompt, seconds: "8", size: "1216x704"}
@@ -93,9 +100,12 @@ Consumer requirements that motivate this shape (vs. base64-in-chat):
 - **Model-agnostic params** — anything LTX-specific (fps, guidance, upscaler
   pass) rides `extra_body`, so third-party video aliases keep working.
 
-Known risk: if LiteLLM's `custom_provider_map` doesn't yet hook the `/videos`
-routes for custom handlers, fall back to a LiteLLM passthrough route serving the
-same three URLs — the client contract must not change either way.
+Resolved risk (was: custom_provider_map may not hook /videos): verified it
+cannot, hence the bridge. The client contract is unchanged either way.
+
+**Video client obligation: do NOT randomize seeds.** Cache-busting is
+server-side from the start on the video path (the protoBanana#39 nonce
+mechanism); a client seed is only ever an explicit user pin.
 
 ## Audio — FUTURE
 
