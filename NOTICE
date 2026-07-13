@@ -1,0 +1,20 @@
+protoDirector
+Copyright (C) 2026 protoLabs Studio
+
+This product is a fork of Palmier Pro (https://github.com/palmier-io/palmier-pro).
+Copyright (C) 2026 Palmier, Inc.
+
+Both the original work and these modifications are licensed under the GNU
+General Public License v3.0 (see LICENSE). "Palmier" and "Palmier Pro" are
+marks of Palmier, Inc. and are not licensed by this fork; this fork ships
+under its own name and does not claim endorsement by Palmier, Inc.
+
+A dated summary of modifications is maintained in CHANGES.md, as required by
+GPLv3 section 5(a). Bundled font licenses are preserved under
+Sources/PalmierPro/Resources/Fonts/.
+
+The app icon glyph is derived from the "clapperboard" icon of Lucide
+(https://lucide.dev), used under the ISC License:
+Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022 as
+part of Feather (MIT). All other copyright (c) for Lucide are held by
+Lucide Contributors 2022.

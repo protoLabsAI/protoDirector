@@ -8,7 +8,7 @@ final class MCPService {
 
     static let port: UInt16 = 19789
 
-    private static let enabledKey = "io.palmier.pro.mcp.enabled"
+    private static let enabledKey = "studio.protolabs.director.mcp.enabled"
 
     static var isEnabledPreference: Bool {
         get {
@@ -41,7 +41,7 @@ final class MCPService {
             }
         ) {
             let server = Server(
-                name: "palmier-pro",
+                name: "proto-director",
                 version: "1.0.0",
                 instructions: AgentInstructions.serverInstructions + AgentInstructions.projectNavigation,
                 capabilities: .init(
@@ -100,13 +100,13 @@ final class MCPService {
         let resources = [
             Resource(
                 name: "Video Models",
-                uri: "palmier://models/video",
+                uri: "proto-director://models/video",
                 description: "Available AI video generation models and their capabilities",
                 mimeType: "application/json"
             ),
             Resource(
                 name: "Image Models",
-                uri: "palmier://models/image",
+                uri: "proto-director://models/image",
                 description: "Available AI image generation models and their capabilities",
                 mimeType: "application/json"
             ),
@@ -124,10 +124,10 @@ final class MCPService {
     @MainActor
     private static func readResource(uri: String) -> ReadResource.Result {
         switch uri {
-        case "palmier://models/video":
+        case "proto-director://models/video":
             let json = ToolExecutor.jsonString(VideoModelConfig.allModels.map { ToolExecutor.videoModelInfo($0) }) ?? "[]"
             return .init(contents: [.text(json, uri: uri, mimeType: "application/json")])
-        case "palmier://models/image":
+        case "proto-director://models/image":
             let json = ToolExecutor.jsonString(ImageModelConfig.allModels.map { ToolExecutor.imageModelInfo($0) }) ?? "[]"
             return .init(contents: [.text(json, uri: uri, mimeType: "application/json")])
         default:

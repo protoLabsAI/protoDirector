@@ -5,17 +5,17 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>Palmier Pro</string>
+	<string>protoDirector</string>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>
 			<key>CFBundleTypeName</key>
-			<string>Palmier Project</string>
+			<string>protoDirector Project</string>
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 			<key>LSItemContentTypes</key>
 			<array>
-				<string>io.palmier.project</string>
+				<string>studio.protolabs.project</string>
 			</array>
 			<key>LSTypeIsPackage</key>
 			<true/>
@@ -24,11 +24,11 @@
 		</dict>
 	</array>
 	<key>CFBundleExecutable</key>
-	<string>PalmierPro</string>
+	<string>protoDirector</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
-	<string>io.palmier.pro</string>
+	<string>studio.protolabs.director</string>
 	<key>CFBundleLocalizations</key>
 	<array>
 		<string>en</string>
@@ -40,7 +40,7 @@
 		<string>zh-Hans</string>
 	</array>
 	<key>CFBundleName</key>
-	<string>Palmier Pro</string>
+	<string>protoDirector</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -49,7 +49,7 @@
 	<array>
 		<dict>
 			<key>CFBundleURLName</key>
-			<string>io.palmier.pro</string>
+			<string>studio.protolabs.director</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>palmier</string>
@@ -62,12 +62,6 @@
 	<string>26.0</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
-	<key>SUEnableAutomaticChecks</key>
-	<true/>
-	<key>SUFeedURL</key>
-	<string>https://raw.githubusercontent.com/palmier-io/palmier-pro/main/appcast.xml</string>
-	<key>SUPublicEDKey</key>
-	<string>Jh56mT+7YZSRsLylQIPyP+4/ahRtTPzfQQaKDZoBsio=</string>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>
@@ -76,9 +70,9 @@
 				<string>com.apple.package</string>
 			</array>
 			<key>UTTypeDescription</key>
-			<string>Palmier Project</string>
+			<string>protoDirector Project</string>
 			<key>UTTypeIdentifier</key>
-			<string>io.palmier.project</string>
+			<string>studio.protolabs.project</string>
 			<key>UTTypeTagSpecification</key>
 			<dict>
 				<key>public.filename-extension</key>

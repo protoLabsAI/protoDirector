@@ -257,7 +257,7 @@ struct AssetThumbnailView: View {
                 .font(.system(size: AppTheme.FontSize.xs, weight: .semibold))
                 .foregroundStyle(AppTheme.Text.secondaryColor)
         }
-        .help("Palmier couldn't load this source file. It may be missing, on an ejected drive, or unreadable.")
+        .help("protoDirector couldn't load this source file. It may be missing, on an ejected drive, or unreadable.")
     }
 
     private func formatDuration(_ seconds: Double) -> String {

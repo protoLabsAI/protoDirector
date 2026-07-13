@@ -33,18 +33,49 @@ if [ -f "$ROOT/$ENV_FILE" ]; then
   set +a
 fi
 
-SIGNING_IDENTITY="${SIGNING_IDENTITY:-Developer ID Application: Palmier, Inc. (MMFLRC7562)}"
-NOTARY_PROFILE="${NOTARY_PROFILE:-palmier-notary}"
+SIGNING_IDENTITY="${SIGNING_IDENTITY:--}"
+NOTARY_PROFILE="${NOTARY_PROFILE:-}"
 SENTRY_DSN="${SENTRY_DSN:-}"
 POSTHOG_PROJECT_TOKEN="${POSTHOG_PROJECT_TOKEN:-}"
 POSTHOG_HOST="${POSTHOG_HOST:-https://us.i.posthog.com}"
-PROVISION_PROFILE="${PROVISION_PROFILE:-$ROOT/scripts/Palmier_Pro_Developer_ID.provisionprofile}"
-ENTITLEMENTS="$ROOT/scripts/PalmierPro.entitlements"
-KEYCHAIN_ACCESS_GROUP="${KEYCHAIN_ACCESS_GROUP:-MMFLRC7562.io.palmier.pro}"
+PROVISION_PROFILE="${PROVISION_PROFILE:-}"
+TEAM_ID="${TEAM_ID:-}"
+BUNDLE_ID="studio.protolabs.director"
+ENTITLEMENTS="$ROOT/.build/protoDirector.entitlements"
+KEYCHAIN_ACCESS_GROUP="${KEYCHAIN_ACCESS_GROUP:-}"
 RESOURCES="$ROOT/Sources/PalmierPro/Resources"
-APP="$ROOT/.build/PalmierPro.app"
-ZIP="$ROOT/.build/PalmierPro.zip"
-DMG="$ROOT/.build/PalmierPro.dmg"
+APP="$ROOT/.build/protoDirector.app"
+ZIP="$ROOT/.build/protoDirector.zip"
+DMG="$ROOT/.build/protoDirector.dmg"
+
+if [ "$MODE" = "sign" ] || [ "$MODE" = "dist" ]; then
+  if [ -z "$SIGNING_IDENTITY" ] || [ "$SIGNING_IDENTITY" = "-" ]; then
+    echo "!! SIGNING_IDENTITY not set — a Developer ID identity is required for --sign/--dist" >&2
+    exit 1
+  fi
+  if [ -z "$TEAM_ID" ]; then
+    echo "!! TEAM_ID not set — required to generate entitlements for --sign/--dist" >&2
+    exit 1
+  fi
+  mkdir -p "$ROOT/.build"
+  cat > "$ENTITLEMENTS" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$TEAM_ID.$BUNDLE_ID</string>
+	</array>
+	<key>com.apple.application-identifier</key>
+	<string>$TEAM_ID.$BUNDLE_ID</string>
+	<key>com.apple.developer.team-identifier</key>
+	<string>$TEAM_ID</string>
+</dict>
+</plist>
+PLIST
+  KEYCHAIN_ACCESS_GROUP="${KEYCHAIN_ACCESS_GROUP:-$TEAM_ID.$BUNDLE_ID}"
+fi
 
 echo "==> Building ($CONFIG)"
 swift build -c "$CONFIG"
@@ -54,7 +85,7 @@ SPARKLE_FW="$ROOT/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm
 echo "==> Assembling $APP"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
-cp "$BIN" "$APP/Contents/MacOS/PalmierPro"
+cp "$BIN" "$APP/Contents/MacOS/protoDirector"
 cp "$RESOURCES/Info.plist" "$APP/Contents/Info.plist"
 
 if [ -n "$SENTRY_DSN" ]; then
@@ -100,10 +131,10 @@ else
   echo "!! missing Fonts/ in SwiftPM resource bundle at $RES_BUNDLE" >&2
   exit 1
 fi
-if [ -f "$RES_BUNDLE/palmier-pro.mcpb" ]; then
-  cp "$RES_BUNDLE/palmier-pro.mcpb" "$APP/Contents/Resources/"
+if [ -f "$RES_BUNDLE/proto-director.mcpb" ]; then
+  cp "$RES_BUNDLE/proto-director.mcpb" "$APP/Contents/Resources/"
 else
-  echo "!! missing palmier-pro.mcpb in SwiftPM resource bundle at $RES_BUNDLE" >&2
+  echo "!! missing proto-director.mcpb in SwiftPM resource bundle at $RES_BUNDLE" >&2
   exit 1
 fi
 if [ -d "$RES_BUNDLE/Images" ]; then
@@ -150,7 +181,7 @@ fi
 mkdir -p "$APP/Contents/Resources/mlx-swift_Cmlx.bundle"
 cp "$MLX_METALLIB" "$APP/Contents/Resources/mlx-swift_Cmlx.bundle/default.metallib"
 
-install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP/Contents/MacOS/PalmierPro"
+install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP/Contents/MacOS/protoDirector"
 touch "$APP"
 
 if [ "$MODE" = "fast" ]; then
@@ -160,10 +191,10 @@ if [ "$MODE" = "fast" ]; then
   exit 0
 fi
 
-DSYM="$ROOT/.build/PalmierPro.dSYM"
+DSYM="$ROOT/.build/protoDirector.dSYM"
 echo "==> Generating dSYM"
 rm -rf "$DSYM"
-dsymutil "$APP/Contents/MacOS/PalmierPro" -o "$DSYM"
+dsymutil "$APP/Contents/MacOS/protoDirector" -o "$DSYM"
 
 upload_dsyms() {
   if [ -z "${SENTRY_AUTH_TOKEN:-}" ] || [ -z "${SENTRY_ORG:-}" ] || [ -z "${SENTRY_PROJECT:-}" ]; then
@@ -205,13 +236,19 @@ codesign --force --options runtime --timestamp \
   --sign "$SIGNING_IDENTITY" \
   "$APP/Contents/Frameworks/Sparkle.framework"
 
-echo "==> Embedding provisioning profile + keychain access group"
-if [ ! -f "$PROVISION_PROFILE" ]; then
-  echo "!! provisioning profile not found at $PROVISION_PROFILE" >&2
-  exit 1
+# Provisioning profile + keychain access group are only needed when the hosted
+# backend (Clerk keychain sharing) is configured — optional in gateway-only builds.
+if [ -n "$PROVISION_PROFILE" ]; then
+  echo "==> Embedding provisioning profile + keychain access group"
+  if [ ! -f "$PROVISION_PROFILE" ]; then
+    echo "!! provisioning profile not found at $PROVISION_PROFILE" >&2
+    exit 1
+  fi
+  cp "$PROVISION_PROFILE" "$APP/Contents/embedded.provisionprofile"
+  inject_plist PalmierClerkKeychainAccessGroup "$KEYCHAIN_ACCESS_GROUP"
+else
+  echo "==> No PROVISION_PROFILE set — skipping embedded profile (fine without hosted backend)"
 fi
-cp "$PROVISION_PROFILE" "$APP/Contents/embedded.provisionprofile"
-inject_plist PalmierClerkKeychainAccessGroup "$KEYCHAIN_ACCESS_GROUP"
 
 echo "==> Codesigning main app"
 codesign --force --options runtime --timestamp \
@@ -241,11 +278,11 @@ rm -f "$ZIP"
 echo "==> Building DMG"
 rm -f "$DMG"
 STAGING="$(mktemp -d)"
-cp -R "$APP" "$STAGING/PalmierPro.app"
+cp -R "$APP" "$STAGING/protoDirector.app"
 ln -s /Applications "$STAGING/Applications"
 cp "$RESOURCES/AppIcon.icns" "$STAGING/.VolumeIcon.icns"
 hdiutil create \
-  -volname "PalmierPro" \
+  -volname "protoDirector" \
   -srcfolder "$STAGING" \
   -ov -format UDZO \
   "$DMG"

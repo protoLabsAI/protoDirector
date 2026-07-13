@@ -105,7 +105,7 @@ enum Trim {
 enum Project {
     static let fileExtension = "palmier"
     static let registryFilename = "project-registry.json"
-    static let typeIdentifier = "io.palmier.project"
+    static let typeIdentifier = "studio.protolabs.project"
     static let defaultProjectName = "Untitled Project"
     static let timelineFilename = "project.json"
     static let manifestFilename = "media.json"
@@ -115,7 +115,7 @@ enum Project {
 
     static var storageDirectory: URL {
         FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Documents/Palmier Pro", isDirectory: true)
+            .appendingPathComponent("Documents/protoDirector", isDirectory: true)
     }
 
     nonisolated static func ensureStorageDirectory() {

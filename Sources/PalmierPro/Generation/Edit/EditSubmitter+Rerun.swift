@@ -14,7 +14,7 @@ extension EditSubmitter {
             case .unknownModel(let id): "Model no longer available: \(id)"
             case .missingSource: "Cannot rerun: source not recorded"
             case .invalid(let msg): msg
-            case .unauthorized: "Subscribe to Palmier to rerun generations"
+            case .unauthorized: "Rerun requires a hosted-backend subscription"
             }
         }
     }
