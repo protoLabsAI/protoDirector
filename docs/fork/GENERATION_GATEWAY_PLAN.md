@@ -79,7 +79,10 @@ load-bearing (identity ref ordering, `grounding_px` tradeoff, Ideogram refusal).
 - Third-party aliases: synthesize conservative entries from `/model/info`
   `mode` (+ a small caps table for sora/veo families).
 
-## Phase 3 — video runner (gated on the LTX-2 alias, protoBanana#38)
+## Phase 3 — video runner (contract AGREED per protoBanana#38; gated on the video bridge going live)
+
+Do not implement client-side seed randomization here — the video path is
+cache-nonce'd server-side from day one (protoBanana#39).
 
 - `generateVideo` on the client: POST `/videos` (JSON or multipart with
   `input_reference`), poll `GET /videos/{id}` (10 s cadence, backoff, per-model
@@ -103,7 +106,7 @@ async job shape, at which point `EditSubmitter` gets its runner seam (seam 4).
 
 | Risk | Mitigation |
 |---|---|
-| LiteLLM custom providers may not hook `/videos` routes yet | Contract fixes the three URLs; passthrough fallback server-side, client unchanged |
+| ~~LiteLLM custom providers may not hook `/videos` routes~~ | Resolved (protoBanana#38): verified they can't — served by a standalone video bridge behind the edge proxy; client unchanged |
 | Upstream merge conflicts in `runJob`/tool layer | All gateway logic in one new file; seams are single lines (see rebrand memory: keep-the-seams-thin is the fork's standing strategy) |
 | ComfyUI queue latency vs. URLSession defaults | 300 s timeout + async video shape for anything longer |
 | RMBG-2.0 workflow is CC BY-NC | Fine for personal use; use BiRefNet alias if builds are ever distributed commercially |
