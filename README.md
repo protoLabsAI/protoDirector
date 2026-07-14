@@ -10,6 +10,11 @@
 
 ---
 
+> [!IMPORTANT]
+> **protoDirector is a pattern, not a product.** It's a reference fork that demonstrates how to wire an AI-native video editor to an OpenAI-compatible gateway — self-hosted models, your own endpoints, no hosted backend. It is not a supported, out-of-the-box release.
+>
+> **Want an editor that just works?** Use the original: **[Palmier Pro](https://github.com/palmier-io/palmier-pro)**.
+
 protoDirector is a fork of [Palmier Pro](https://github.com/palmier-io/palmier-pro), an open source AI-native video editor for Mac. You and your agent can generate and edit videos together inside the timeline.
 
 What this fork changes:
