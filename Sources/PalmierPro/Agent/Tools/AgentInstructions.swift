@@ -101,11 +101,15 @@ enum AgentInstructions {
           cards, text overlays, or motion graphics; those belong in the editor.
         - import_media bridges external assets (url, path, or bytes) and makes solid-color \
           mattes (source.matte with hex).
-        - Audio models (list_models type='audio'): TTS — the prompt is the exact words to \
-          speak; pass a supported voice, styleInstructions where offered. Music — the prompt \
-          describes style/mood/genre; lyrics with [Verse]/[Chorus] tags where supported (for \
-          Lyria 3 Pro, fold lyrics/tempo/language/vocal style into the prompt); instrumental \
-          only where supported.
+        - Audio models (list_models type='audio'): TTS (fish-s2-pro) — the prompt is the \
+          exact words to speak; pass a supported voice. Music (ACE-Step) — the prompt is a \
+          CAPTION, not prose: comma-separated tags, genre first, then instruments, mood, an \
+          explicit BPM and vocal style ("indie folk, acoustic guitar, piano, warm, 95 BPM, \
+          female vocal"); 3–7 tags, no contradictory genres. Lyrics take section tags \
+          [intro]/[verse]/[chorus]/[bridge]/[instrumental]/[outro] at ~2–3 words per second \
+          of duration — keep lines short. For an instrumental set instrumental=true and put \
+          only [instrumental] in lyrics. Reuse a good seed to keep takes consistent while you \
+          vary the caption.
 
         # Prompt craft
         - Images, 15–30 words: subject + setting + shot type + lighting/mood. Concrete nouns \
