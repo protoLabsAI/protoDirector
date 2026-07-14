@@ -109,7 +109,8 @@ enum AgentInstructions {
           [intro]/[verse]/[chorus]/[bridge]/[instrumental]/[outro] at ~2–3 words per second \
           of duration — keep lines short. For an instrumental set instrumental=true and put \
           only [instrumental] in lyrics. Reuse a good seed to keep takes consistent while you \
-          vary the caption.
+          vary the caption. Iterate at quality='standard' (fast); switch to quality='high' \
+          for the final take (higher fidelity, ~2× slower).
 
         # Prompt craft
         - Images, 15–30 words: subject + setting + shot type + lighting/mood. Concrete nouns \

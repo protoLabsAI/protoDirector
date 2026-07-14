@@ -53,6 +53,7 @@ struct GatewayAudioJob: Sendable {
     var negativePrompt: String?
     var format: String = "mp3"
     var sourceAudioURL: URL?
+    var dit: String?   // music fidelity tier: nil/turbo (fast default) | sft (high, ~2× slower)
     var fields: [String: String] = [:]
 }
 
@@ -212,7 +213,7 @@ enum GatewayGenerationRunner {
             return try await client.generateMusic(
                 model: job.model, prompt: job.prompt, lyrics: job.lyrics,
                 instrumental: job.instrumental, seconds: job.seconds, n: job.n,
-                seed: job.seed, negativePrompt: job.negativePrompt, format: job.format
+                seed: job.seed, negativePrompt: job.negativePrompt, format: job.format, dit: job.dit
             )
         }
         if job.op == .speech {

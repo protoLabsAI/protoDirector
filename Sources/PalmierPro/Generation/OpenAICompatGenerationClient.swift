@@ -229,7 +229,7 @@ struct OpenAICompatGenerationClient: Sendable {
     func generateMusic(
         model: String, prompt: String, lyrics: String?, instrumental: Bool,
         seconds: Int?, n: Int = 1, seed: Int? = nil, negativePrompt: String? = nil,
-        format: String = "mp3"
+        format: String = "mp3", dit: String? = nil
     ) async throws -> [URL] {
         var req = request(path: "audio/generations", contentType: "application/json")
         var body: [String: Any] = [
@@ -240,6 +240,7 @@ struct OpenAICompatGenerationClient: Sendable {
         if let seconds { body["seconds"] = seconds }
         if let seed { body["seed"] = seed }
         if let negativePrompt, !negativePrompt.isEmpty { body["negative_prompt"] = negativePrompt }
+        if let dit, !dit.isEmpty { body["dit"] = dit }   // fidelity tier: turbo (default) | sft
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
         return try Self.materializeAudio(from: try await send(req), format: format)
     }

@@ -264,6 +264,7 @@ extension ToolExecutor {
         job.instrumental = args.bool("instrumental") ?? !hasLyrics
         job.seconds = args.int("duration")
         job.seed = args.int("seed")
+        job.dit = try Self.ditTier(args.string("quality"))
         if let format = args.string("format") { job.format = format }
 
         let folderId = try resolveFolder(args, editor: editor, fallbackReferences: [])
@@ -276,7 +277,19 @@ extension ToolExecutor {
         )
         let kind = job.instrumental ? "instrumental" : (hasLyrics ? "song" : "music")
         let dur = job.seconds.map { "\($0)s " } ?? ""
-        return .ok("Generation started. Placeholder asset ID: \(placeholderId). Model: \(job.model), \(dur)\(kind). Poll get_media with this id; the result lands as an audio asset.")
+        let tier = job.dit == "sft" ? ", quality: high (slower)" : ""
+        return .ok("Generation started. Placeholder asset ID: \(placeholderId). Model: \(job.model), \(dur)\(kind)\(tier). Poll get_media with this id; the result lands as an audio asset.")
+    }
+
+    /// Maps the agent's `quality` selector to the ACE-Step fidelity tier (protoLab#22):
+    /// nil → server default (turbo); high → sft (50 steps / CFG 6, ~2× slower).
+    nonisolated static func ditTier(_ quality: String?) throws -> String? {
+        guard let q = quality?.lowercased(), !q.isEmpty else { return nil }
+        switch q {
+        case "high", "sft": return "sft"
+        case "standard", "draft", "fast", "turbo": return "turbo"
+        default: throw ToolError("quality must be 'standard' (fast) or 'high' (fidelity).")
+        }
     }
 
     /// generate_audio with `voice`: Fish TTS via the native /audio/speech route.

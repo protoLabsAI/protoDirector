@@ -90,6 +90,33 @@ struct GatewayAudioTests {
         #expect(try Data(contentsOf: url) == AudioAdapterStub.clipBytes)
     }
 
+    @Test func sftTierRidesTheGenerationBody() async throws {
+        AudioAdapterStub.reset()
+        var job = GatewayAudioJob(model: "protolabs/ace-step", prompt: "cinematic swell")
+        job.dit = "sft"
+        _ = try await GatewayGenerationRunner.executeAudio(job, client: Self.stubClient)
+        let call = try #require(AudioAdapterStub.calls.first)
+        #expect(call.path.hasSuffix("/audio/generations"))
+        #expect(call.body.contains(#""dit":"sft""#), "the fidelity tier must ride the body")
+    }
+
+    @Test func turboIsTheDefaultAndOmitsDit() async throws {
+        AudioAdapterStub.reset()
+        let job = GatewayAudioJob(model: "protolabs/ace-step", prompt: "lofi loop")
+        _ = try await GatewayGenerationRunner.executeAudio(job, client: Self.stubClient)
+        let call = try #require(AudioAdapterStub.calls.first)
+        #expect(!call.body.contains(#""dit""#), "no tier → let the server default to turbo")
+    }
+
+    @Test func qualitySelectorMapsToTier() throws {
+        #expect(try ToolExecutor.ditTier("high") == "sft")
+        #expect(try ToolExecutor.ditTier("sft") == "sft")
+        #expect(try ToolExecutor.ditTier("standard") == "turbo")
+        #expect(try ToolExecutor.ditTier(nil) == nil)
+        #expect(try ToolExecutor.ditTier("") == nil)
+        #expect(throws: ToolError.self) { _ = try ToolExecutor.ditTier("ultra") }
+    }
+
     @Test func synthesizeSpeechPostsJSONAndWritesRawBytes() async throws {
         AudioAdapterStub.reset()
         let url = try await Self.stubClient.synthesizeSpeech(

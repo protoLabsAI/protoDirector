@@ -138,6 +138,15 @@ existing `AudioGenerationParams` (prompt, lyrics, instrumental, durationSeconds)
 Variation / retake is this endpoint with a fresh `seed` (or `n > 1`) — not a
 separate op.
 
+**Fidelity tier** — optional `dit`: `"turbo"` (default, fast) | `"sft"` (higher
+fidelity, ~2× slower). Tier-aware server defaults (turbo: 8 steps / no CFG /
+shift 3.0; sft: 50 steps / CFG 6.0 / shift 2.0) apply automatically; optional
+`steps` / `guidance` / `shift` override them. Response echoes `dit`; `dit: "sft"`
+returns 503 rather than silently downgrading if the tier isn't loaded.
+`/model/info` advertises `dit_tiers` + per-tier `defaults` (protoLab#22). The
+client exposes this as the agent's `quality` selector (`standard` → turbo,
+`high` → sft); raw `steps`/`guidance`/`shift` are not yet surfaced.
+
 ### `POST /v1/audio/edits` (multipart, sync)
 Parts: `audio` (required input clip), optional `reference_audio` (voice / style
 transfer). Fields: `model`, `prompt`, `lyrics`, `seed`, plus per-op extras:
