@@ -45,6 +45,14 @@ struct Timeline: Codable, Sendable, Equatable, Identifiable {
         tracks.contains { $0.type == .audio && !$0.clips.isEmpty }
     }
 
+    var hasSoloedTrack: Bool { tracks.contains(where: \.soloed) }
+
+    /// Solo-aware audibility: a mute always silences; once any track is soloed, only soloed tracks play.
+    func trackIsAudible(_ track: Track) -> Bool {
+        guard !track.muted else { return false }
+        return !hasSoloedTrack || track.soloed
+    }
+
     /// Reachable nested timelines, breadth-first, deduped, excluding self and filtered by `include`.
     func reachableTimelines(
         resolve: (String) -> Timeline?,
@@ -94,6 +102,9 @@ struct Track: Codable, Sendable, Equatable, Identifiable {
     var id: String = UUID().uuidString
     var type: ClipType
     var muted: Bool = false
+    var soloed: Bool = false
+    /// Lane fader as a linear amplitude multiplier; 1.0 = 0 dB.
+    var gain: Double = 1.0
     var hidden: Bool = false
     var syncLocked: Bool = true
     var clips: [Clip] = []
@@ -121,7 +132,7 @@ struct Track: Codable, Sendable, Equatable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, type, muted, hidden, syncLocked, clips, displayHeight
+        case id, type, muted, soloed, gain, hidden, syncLocked, clips, displayHeight
     }
 }
 
@@ -132,6 +143,8 @@ extension Track {
             id: (try? c.decode(String.self, forKey: .id)) ?? UUID().uuidString,
             type: try c.decode(ClipType.self, forKey: .type),
             muted: (try? c.decode(Bool.self, forKey: .muted)) ?? false,
+            soloed: (try? c.decode(Bool.self, forKey: .soloed)) ?? false,
+            gain: (try? c.decode(Double.self, forKey: .gain)) ?? 1.0,
             hidden: (try? c.decode(Bool.self, forKey: .hidden)) ?? false,
             syncLocked: (try? c.decode(Bool.self, forKey: .syncLocked)) ?? true,
             clips: (try? c.decode([Clip].self, forKey: .clips)) ?? [],

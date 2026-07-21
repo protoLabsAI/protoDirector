@@ -93,6 +93,38 @@ extension EditorViewModel {
         toggleTrackFlag(trackIndex: trackIndex, keyPath: \.hidden, onName: "Hide Track", offName: "Show Track")
     }
 
+    func toggleTrackSolo(trackIndex: Int) {
+        toggleTrackFlag(trackIndex: trackIndex, keyPath: \.soloed, onName: "Solo Track", offName: "Unsolo Track")
+    }
+
+    // MARK: - Gain (lane fader)
+
+    static let trackGainCeiling = VolumeScale.linearFromDb(VolumeScale.ceilingDb)
+
+    /// Live per-track gain during a header-fader drag. No undo; coalesced preview refresh so the mix follows the drag.
+    func setTrackGainLive(trackIndex: Int, gain: Double) {
+        guard timeline.tracks.indices.contains(trackIndex) else { return }
+        let clamped = max(0, min(Self.trackGainCeiling, gain))
+        guard timeline.tracks[trackIndex].gain != clamped else { return }
+        timeline.tracks[trackIndex].gain = clamped
+        notifyTimelineChangedDebounced()
+    }
+
+    /// Register one undo step for a completed gain drag.
+    func commitTrackGain(trackIndex: Int, before: Timeline) {
+        guard before != timeline else { return }
+        registerTimelineSwap(undoState: before, redoState: timeline, actionName: "Change Track Gain")
+        notifyTimelineChanged(refreshVisuals: false)
+    }
+
+    /// Reset a lane to unity (0 dB) as a single undoable action.
+    func resetTrackGain(trackIndex: Int) {
+        guard timeline.tracks.indices.contains(trackIndex), timeline.tracks[trackIndex].gain != 1 else { return }
+        let before = timeline
+        timeline.tracks[trackIndex].gain = 1
+        commitTrackGain(trackIndex: trackIndex, before: before)
+    }
+
     func toggleTrackSyncLock(trackIndex: Int) {
         if timeline.tracks.indices.contains(trackIndex),
            timeline.tracks[trackIndex].syncLocked,

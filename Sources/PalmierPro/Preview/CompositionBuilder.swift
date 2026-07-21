@@ -519,32 +519,33 @@ enum CompositionBuilder {
                 let params = AVMutableAudioMixInputParameters(track: mapping.compositionTrack)
                 guard timeline.tracks.indices.contains(parentTrackIndex) else { return params }
                 let parentTrack = timeline.tracks[parentTrackIndex]
-                if parentTrack.muted {
+                if !timeline.trackIsAudible(parentTrack) {
                     params.setVolume(0, at: .zero)
                     return params
                 }
                 // Prefer the live carrier so nest volume/fade edits apply on refresh.
                 let liveCarrier = parentTrack.clips.first { $0.id == carrier.id } ?? carrier
                 for clip in clips {
-                    emitVolumeEnvelope(params: params, clip: clip, timescale: timescale, carrier: liveCarrier)
+                    emitVolumeEnvelope(params: params, clip: clip, timescale: timescale, carrier: liveCarrier, gain: Float(parentTrack.gain))
                 }
                 return params
             case .timeline(let trackIndex, let clipIds):
                 guard timeline.tracks.indices.contains(trackIndex) else { return nil }
                 let track = timeline.tracks[trackIndex]
                 let params = AVMutableAudioMixInputParameters(track: mapping.compositionTrack)
-                if track.muted {
+                if !timeline.trackIsAudible(track) {
                     params.setVolume(0, at: .zero)
                     return params
                 }
+                let laneGain = Float(track.gain)
                 var prevEndFrame = Int.min
                 for clip in track.clips.sorted(by: { $0.startFrame < $1.startFrame }) {
                     if let clipIds, !clipIds.contains(clip.id) { continue }
                     guard clip.durationFrames > 0, clip.startFrame >= prevEndFrame else { continue }
                     let strength = clip.hasDenoiseEnabled ? Float(min(1, max(0, clip.denoiseAmount))) : 0
-                    let gain: Float = mapping.wetAudio
+                    let gain: Float = (mapping.wetAudio
                         ? strength
-                        : (mapping.blendedClipIds.contains(clip.id) ? 1 - strength : 1)
+                        : (mapping.blendedClipIds.contains(clip.id) ? 1 - strength : 1)) * laneGain
                     emitVolumeEnvelope(params: params, clip: clip, timescale: timescale, gain: gain)
                     prevEndFrame = clip.startFrame + clip.durationFrames
                 }
