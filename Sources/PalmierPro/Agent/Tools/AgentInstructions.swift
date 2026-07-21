@@ -103,9 +103,10 @@ enum AgentInstructions {
           mattes (source.matte with hex).
         - Audio models (list_models type='audio'): TTS (fish-s2-pro) — the prompt is the \
           exact words to speak; pass a supported voice. Music (ACE-Step) — the prompt is a \
-          CAPTION, not prose: comma-separated tags, genre first, then instruments, mood, an \
-          explicit BPM and vocal style ("indie folk, acoustic guitar, piano, warm, 95 BPM, \
-          female vocal"); 3–7 tags, no contradictory genres. Lyrics take section tags \
+          descriptive prose caption: genre, instruments, vocal character, production texture and \
+          mood in a sentence or two, ending with an explicit BPM ("A warm, intimate indie-folk \
+          track led by fingerpicked acoustic guitar and soft piano under a gentle female lead \
+          vocal, with light room reverb. 95 BPM."). Lyrics take section tags \
           [intro]/[verse]/[chorus]/[bridge]/[instrumental]/[outro] at ~2–3 words per second \
           of duration — keep lines short. For an instrumental set instrumental=true and put \
           only [instrumental] in lyrics. Reuse a good seed to keep takes consistent while you \
