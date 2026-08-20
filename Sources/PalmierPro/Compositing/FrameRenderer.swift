@@ -2,7 +2,7 @@ import AVFoundation
 import CoreImage
 
 /// Composites a frame from a CompositorInstruction's layers with Core Image:
-/// per-layer crop → effects → transform → opacity, stacked bottom→top.
+/// per-layer crop → effects → corner mask → transform → opacity, stacked bottom→top.
 enum FrameRenderer {
 
     static func render(
@@ -43,7 +43,49 @@ enum FrameRenderer {
         var accum = background
         for layer in layers {
             if gateByClipRange, !layer.clip.contains(timelineFrame: frame) { continue }
-            let mode = layer.clip.blendMode ?? .normal
+
+            if case .text = layer.source, layer.clip.textFillMode == .footage {
+                let opacity = min(1.0, max(0.0, layer.clip.opacityAt(frame: frame)))
+                if opacity > 0, let mask = textStencilMask(layer, frame: frame, renderSize: renderSize) {
+                    let original = accum
+                    let color = (layer.clip.textStyle ?? TextStyle()).color
+                    let matte = CIImage(color: CIColor(
+                        red: CGFloat(color.r),
+                        green: CGFloat(color.g),
+                        blue: CGFloat(color.b),
+                        alpha: CGFloat(color.a)
+                    ))
+                    .cropped(to: accum.extent)
+                    .composited(over: accum)
+                    let stencil = accum.applyingFilter("CIBlendWithMask", parameters: [
+                        kCIInputBackgroundImageKey: matte,
+                        kCIInputMaskImageKey: mask,
+                    ]).cropped(to: accum.extent)
+                    let stenciled = applyTextEffects(
+                        stencil,
+                        clip: layer.clip,
+                        frame: frame,
+                        renderSize: renderSize
+                    )
+                    if opacity < 1 {
+                        let f = CIFilter(name: "CIDissolveTransition")
+                        f?.setValue(original, forKey: kCIInputImageKey)
+                        f?.setValue(stenciled, forKey: "inputTargetImage")
+                        f?.setValue(opacity, forKey: "inputTime")
+                        accum = (f?.outputImage ?? stenciled).cropped(to: original.extent)
+                    } else {
+                        accum = stenciled
+                    }
+                }
+                continue
+            }
+
+            let mode: BlendMode
+            if case .text = layer.source, layer.clip.textFillMode == .inverted {
+                mode = .difference
+            } else {
+                mode = layer.clip.blendMode ?? .normal
+            }
             // Source-over bakes opacity into alpha; blend modes apply it as a fade of
             // the blend RESULT (Photoshop/Premiere semantics), so don't bake it there.
             let isNormal = mode.ciFilterName == nil
@@ -69,6 +111,21 @@ enum FrameRenderer {
             }
         }
         return accum
+    }
+
+    private static func textStencilMask(
+        _ layer: LayerPlan,
+        frame: Int,
+        renderSize: CGSize
+    ) -> CIImage? {
+        var clip = layer.clip
+        var style = clip.textStyle ?? TextStyle()
+        style.color = .init(r: 1, g: 1, b: 1, a: 1)
+        clip.textStyle = style
+        guard let image = TextFrameRenderer.image(clip: clip, frame: frame, renderSize: renderSize) else {
+            return nil
+        }
+        return transformedTextImage(image, clip: clip, frame: frame, renderSize: renderSize)
     }
 
     /// Children composite at the child canvas; the nest clip's pipeline runs on the result.
@@ -214,7 +271,7 @@ enum FrameRenderer {
         )
     }
 
-    /// Crop → effects → transform → opacity, sampled from `layer.clip` at `frame`.
+    /// Crop → effects → corner mask → transform → opacity, sampled from `layer.clip` at `frame`.
     private static func applyClipPipeline(
         image input: CIImage,
         srcHeight: CGFloat,
@@ -253,8 +310,13 @@ enum FrameRenderer {
             }
         }
 
-        // transformAt drops the flip flags, so use the static transform unless animated.
-        let t = clip.hasTransformAnimation ? clip.transformAt(frame: frame) : clip.transform
+        image = EdgeRoundingKernel.apply(
+            image,
+            edgeRounding: clip.edgeRounding,
+            edgeSoftness: clip.edgeSoftness
+        )
+
+        let t = clip.transformAt(frame: frame)
         let av = layer.preferredTransform.concatenating(
             CompositionBuilder.affineTransform(for: t, natSize: layer.natSize, renderSize: renderSize)
         )
@@ -272,26 +334,40 @@ enum FrameRenderer {
         return image
     }
 
-    /// Text renders flat in place; opacity fades apply after. Per-word animation bakes in at raster. Preset only, no keyframed transform.
+    /// Text renders in place; effects run before rotation and opacity, matching visual clips.
     private static func composedTextLayer(
         _ layer: LayerPlan,
         frame: Int,
         renderSize: CGSize,
         bakeOpacity: Bool = true
     ) -> CIImage? {
-        let clip = layer.clip
+        var clip = layer.clip
         let alpha = min(1.0, max(0.0, clip.opacityAt(frame: frame)))
         guard alpha > 0 else { return nil }
+        if clip.textFillMode == .inverted {
+            var style = clip.textStyle ?? TextStyle()
+            style.color = .init(r: 1, g: 1, b: 1, a: 1)
+            style.border.enabled = false
+            style.shadow.enabled = false
+            style.background.color.a = 0
+            style.background.outlineColor.a = 0
+            clip.textStyle = style
+        }
         guard var image = TextFrameRenderer.image(clip: clip, frame: frame, renderSize: renderSize)?
             .unpremultiplyingAlpha() else { return nil }
 
-        if let effects = clip.effects, !effects.isEmpty {
-            let offset = frame - clip.startFrame
-            for effect in effects where effect.enabled {
-                guard let descriptor = EffectRegistry.descriptor(id: effect.type) else { continue }
-                image = descriptor.render(image, effect: effect, atOffset: offset)
-            }
+        image = applyTextEffects(image, clip: clip, frame: frame, renderSize: renderSize)
+        if clip.textFillMode == .inverted {
+            let zero = CIVector(x: 0, y: 0, z: 0, w: 0)
+            image = image.applyingFilter("CIColorMatrix", parameters: [
+                "inputRVector": zero,
+                "inputGVector": zero,
+                "inputBVector": zero,
+                "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1),
+                "inputBiasVector": CIVector(x: 1, y: 1, z: 1, w: 0),
+            ])
         }
+        image = transformedTextImage(image, clip: clip, frame: frame, renderSize: renderSize)
         image = image.premultiplyingAlpha()
 
         if bakeOpacity, alpha < 1 {
@@ -300,6 +376,91 @@ enum FrameRenderer {
             ])
         }
         return image
+    }
+
+    static func applyTextEffects(
+        _ input: CIImage,
+        clip: Clip,
+        frame: Int,
+        renderSize: CGSize
+    ) -> CIImage {
+        let blurRadius = clip.blurRadius(at: frame)
+        let effects = (clip.effects ?? []).filter { $0.type != Effect.gaussianBlurType }
+        guard blurRadius > 0 || !effects.isEmpty else { return input }
+        let renderRect = CGRect(origin: .zero, size: renderSize)
+        var image = input.composited(over: CIImage(color: .clear).cropped(to: renderRect))
+        let offset = frame - clip.startFrame
+        let spatialScale = Double(renderSize.height / TextLayout.referenceCanvasHeight)
+        if blurRadius.isFinite,
+           let descriptor = EffectRegistry.descriptor(id: Effect.gaussianBlurType) {
+            image = descriptor.render(
+                image,
+                effect: Effect.make(
+                    Effect.gaussianBlurType,
+                    [Effect.gaussianBlurRadiusKey: blurRadius]
+                ),
+                atOffset: offset,
+                spatialScale: spatialScale
+            )
+        }
+        for effect in effects where effect.enabled {
+            guard let descriptor = EffectRegistry.descriptor(id: effect.type) else { continue }
+            image = descriptor.render(
+                image,
+                effect: effect,
+                atOffset: offset,
+                spatialScale: spatialScale
+            )
+        }
+        return image
+    }
+
+    private static func transformedTextImage(
+        _ image: CIImage,
+        clip: Clip,
+        frame: Int,
+        renderSize: CGSize
+    ) -> CIImage {
+        let transform = clip.transformAt(frame: frame)
+        if transform.hasTiltRotation {
+            return tiltedTextImage(image, transform: transform, renderSize: renderSize)
+        }
+
+        let rotation = CompositionBuilder.canvasRotationTransform(for: transform, renderSize: renderSize)
+        guard !rotation.isIdentity else { return image }
+        let ciTransform = flipY(renderSize.height)
+            .concatenating(rotation)
+            .concatenating(flipY(renderSize.height))
+        return image.transformed(by: ciTransform)
+    }
+
+    /// Projects the raster's actual extent, so glyphs drawn off canvas can tilt back into frame.
+    private static func tiltedTextImage(
+        _ image: CIImage,
+        transform: Transform,
+        renderSize: CGSize
+    ) -> CIImage {
+        let source = image.extent.isInfinite
+            ? image.cropped(to: CGRect(origin: .zero, size: renderSize))
+            : image
+        guard !source.extent.isEmpty else { return image }
+
+        let flip = flipY(renderSize.height)
+        let corners = TextTiltGeometry.corners(
+            of: source.extent.applying(flip),
+            around: CGPoint(
+                x: transform.centerX * renderSize.width,
+                y: transform.centerY * renderSize.height
+            ),
+            transform: transform,
+            canvasSize: renderSize
+        )
+        return source.applyingFilter("CIPerspectiveTransform", parameters: [
+            "inputTopLeft": CIVector(cgPoint: corners.topLeft.applying(flip)),
+            "inputTopRight": CIVector(cgPoint: corners.topRight.applying(flip)),
+            "inputBottomRight": CIVector(cgPoint: corners.bottomRight.applying(flip)),
+            "inputBottomLeft": CIVector(cgPoint: corners.bottomLeft.applying(flip)),
+        ])
     }
 
     private static func flipY(_ height: CGFloat) -> CGAffineTransform {

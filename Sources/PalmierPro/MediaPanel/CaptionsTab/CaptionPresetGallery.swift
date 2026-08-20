@@ -10,8 +10,8 @@ struct CaptionPresetGallery: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: AppTheme.Spacing.lg) {
-            section("Per line", [.none] + TextAnimation.Preset.perLine)
-            section("Per word", TextAnimation.Preset.perWord)
+            section(L10n.string("Per line"), [.none] + TextAnimation.Preset.perLine)
+            section(L10n.string("Per word"), TextAnimation.Preset.perWord)
         }
     }
 
@@ -60,7 +60,7 @@ private struct CaptionPresetCell: View {
                         selected ? AppTheme.Accent.timecodeColor : AppTheme.Border.subtleColor,
                         lineWidth: selected ? AppTheme.BorderWidth.medium : AppTheme.BorderWidth.hairline)
             )
-            Text(preset.displayName)
+            Text(L10n.string(key: preset.displayName))
                 .font(.system(size: AppTheme.FontSize.xxs, weight: selected ? .semibold : .regular))
                 .foregroundStyle(selected ? AppTheme.Text.primaryColor : AppTheme.Text.tertiaryColor)
                 .lineLimit(1)
@@ -89,10 +89,7 @@ private struct CaptionPresetCell: View {
     }
 
     private var previewClip: Clip {
-        var style = TextStyle()
-        style.color = .init(r: 1, g: 1, b: 1, a: 1)
-        style.shadow.enabled = false
-        style.fontSize = 300   // fraction of render height; large so the sample reads in a small cell
+        let style = TextStyle(fontSize: 300)
         let transform = Transform(centerX: 0.5, centerY: 0.5, width: 0.92, height: 0.55)
         return CaptionPreviewRender.clip(content: Self.sample, style: style, transform: transform, preset: preset, highlight: highlight)
     }

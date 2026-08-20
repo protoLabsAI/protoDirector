@@ -2,14 +2,16 @@
   "changelogURL": "https://github.com/palmier-io/palmier-pro/releases",
   "entries": [
     {
-      "version": "0.6.4",
-      "date": "2026-07-09",
+      "version": "0.7.6",
+      "date": "2026-08-18",
       "sections": [
         {
           "heading": "New",
           "items": [
-            "Multicam editing: Agent can now work with multiple camera footage with better tools. Especially useful for podcast or other multi-camera setups.",
-            "10-bit HDR export: New HEVC 10-bit HDR export option."
+            "Timeline Index - A new way to navigate the timeline in the media panel. In the index tab, you can search the timeline via transcripts. You can also manage markers and handoff to agents to address them.",
+            "Ripple markers with edits: Markers can move with ripple edits. This is configurable in the dropdown next to the marker button in toolbar.",
+            "Smart Search model installs on demand when agent needs it.",
+            "More supported languages: German, Dutch, Polish, Swedish, Czech, Danish, Norwegian, Finnish, Ukrainian, Indonesian, Thai, Hebrew, and European Portuguese"
           ]
         }
       ]

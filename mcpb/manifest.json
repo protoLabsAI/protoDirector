@@ -2,22 +2,22 @@
   "manifest_version": "0.4",
   "name": "proto-director",
   "display_name": "protoDirector",
-  "version": "0.1.0",
-  "description": "Edit your protoDirector project timeline from Claude Desktop.",
-  "long_description": "Connects Claude Desktop to the local MCP server inside protoDirector \u2014 an AI-native Mac video editor. Once installed, Claude can read your timeline, edit clips, generate media, and manage tracks. Requires protoDirector to be running with a project open.",
+  "version": "0.2.0",
+  "description": "Edit your videos with protoDirector from Claude Desktop.",
+  "long_description": "Connects Claude Desktop to the local MCP server inside protoDirector — an AI-native Mac video editor. Once installed, Claude can read your timeline, edit clips, generate media, and manage tracks.",
   "icon": "icon.png",
   "author": {
     "name": "protoLabs Studio",
     "url": "https://github.com/protoLabsAI/protoDirector"
   },
   "homepage": "https://github.com/protoLabsAI/protoDirector",
-  "keywords": [
-    "video",
-    "editor",
-    "timeline",
-    "creative",
-    "media"
-  ],
+  "keywords": ["video", "editor", "timeline", "creative", "media"],
+  "compatibility": {
+    "platforms": ["darwin"],
+    "runtimes": {
+      "node": ">=18.0.0"
+    }
+  },
   "server": {
     "type": "node",
     "entry_point": "server/index.js",

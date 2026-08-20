@@ -31,20 +31,23 @@ struct CapsuleButtonStyle: ButtonStyle {
                 : AnyShapeStyle(AppTheme.Text.secondaryColor)
         }
         private var background: AnyShapeStyle {
-            guard isEnabled else { return AnyShapeStyle(AppTheme.Background.prominentColor) }
+            guard isEnabled else { return AnyShapeStyle(AppTheme.Background.raisedColor) }
+            if let fill { return fill }
             return variant == .prominent
-                ? (fill ?? AnyShapeStyle(AppTheme.Accent.primary))
+                ? AnyShapeStyle(AppTheme.Accent.primary)
                 : AnyShapeStyle(AppTheme.Background.prominentColor)
         }
 
         var body: some View {
             configuration.label
-                .font(.system(size: fontSize, weight: .medium))
+                .font(.system(size: fontSize, weight: AppTheme.FontWeight.medium))
                 .foregroundStyle(foreground)
                 .padding(.horizontal, hPadding)
                 .padding(.vertical, vPadding)
                 .background(Capsule(style: .continuous).fill(background))
-                .overlay(Capsule(style: .continuous).fill(.white.opacity(isEnabled && hovered ? AppTheme.Opacity.faint : 0)))
+                .overlay(Capsule(style: .continuous).fill(
+                    AppTheme.Interaction.fill(isEnabled && hovered ? AppTheme.Opacity.faint : 0)
+                ))
                 .opacity(isEnabled
                     ? (configuration.isPressed ? AppTheme.Opacity.strong : AppTheme.Opacity.opaque)
                     : AppTheme.Opacity.strong)
@@ -53,6 +56,17 @@ struct CapsuleButtonStyle: ButtonStyle {
                 .animation(.easeOut(duration: AppTheme.Anim.hover), value: hovered)
                 .animation(.easeOut(duration: AppTheme.Anim.hover), value: isEnabled)
         }
+    }
+}
+
+extension View {
+    func titlebarCapsule(fill: Color, foreground: Color) -> some View {
+        font(.system(size: AppTheme.FontSize.sm, weight: AppTheme.FontWeight.semibold))
+            .foregroundStyle(foreground)
+            .lineLimit(1)
+            .padding(.horizontal, AppTheme.Spacing.smMd)
+            .frame(height: AppTheme.IconSize.mdLg)
+            .background(Capsule(style: .continuous).fill(fill))
     }
 }
 

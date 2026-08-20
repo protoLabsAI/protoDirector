@@ -3,6 +3,7 @@ import Foundation
 extension ToolExecutor {
 
     private static let removeWordsAllowedKeys: Set<String> = ["words", "matches", "cutAggressiveness", "language"]
+    private static let removeSilenceAllowedKeys: Set<String> = ["clipIds", "minimumPauseSeconds", "speechPaddingSeconds"]
 
     func removeWords(_ editor: EditorViewModel, _ args: [String: Any]) async throws -> ToolResult {
         try validateUnknownKeys(args, allowed: Self.removeWordsAllowedKeys, path: "remove_words")
@@ -25,10 +26,24 @@ extension ToolExecutor {
             aggressiveness = a
         } else { aggressiveness = .balanced }
 
-        let context = try await transcriptionContext(args, path: "remove_words", preferLast: true) {
-            await editor.captionCloudCreditCost(for: .init(autoDetect: true, provider: .cloud))
+        let session: TranscriptSession
+        if let remembered = lastTranscriptSession, remembered.timelineId == editor.activeTimelineId {
+            if rawWords != nil, !remembered.hasSameWordMapping(in: editor) {
+                throw ToolError("The timeline sources from the previous get_transcript have changed. Call get_transcript again before remove_words.")
+            }
+            session = remembered
+        } else {
+            if rawWords != nil, lastTranscriptSession != nil {
+                throw ToolError("The previous get_transcript belongs to a different timeline. Call get_transcript again before remove_words.")
+            }
+            let scope = TranscriptionScope.automatic
+            let cloudRequest = scope.captionRequest(in: editor, provider: .cloud)
+            let context = try await transcriptionContext(args, path: "remove_words") {
+                await editor.captionCloudCreditCost(for: cloudRequest)
+            }
+            session = TranscriptSession(context: context, scope: scope, editor: editor)
         }
-        let transcript = try await timelineTranscript(editor, context: context)
+        let transcript = try await timelineTranscript(editor, session: session)
         let allWords = transcript.words
         guard !allWords.isEmpty else { throw ToolError("No transcribable speech on the timeline.") }
 
@@ -102,10 +117,9 @@ extension ToolExecutor {
         let primaryRanges = rangesByTrack[primaryTrack]!
 
         let snapshot = timelineSnapshot(editor)
-        editor.undoManager?.beginUndoGrouping()
-        let outcome = editor.rippleDeleteRangesOnTrack(trackIndex: primaryTrack, ranges: primaryRanges)
-        editor.undoManager?.endUndoGrouping()
-        editor.undoManager?.setActionName("Remove Words (Agent)")
+        let outcome = editor.undo.perform("Remove Words (Agent)") {
+            editor.rippleDeleteRangesOnTrack(trackIndex: primaryTrack, ranges: primaryRanges)
+        }
         guard case .ok(let report) = outcome else {
             if case .refused(let reason) = outcome { throw ToolError("Ripple delete refused: \(reason)") }
             throw ToolError("Ripple delete refused.")
@@ -114,7 +128,7 @@ extension ToolExecutor {
         var extra: [String: Any] = [
             "removedWords": removedTexts.count, "removedFrames": report.removedFrames,
             "cutAggressiveness": aggressiveness.rawValue,
-            "transcriptionSource": context.provider.rawValue,
+            "transcriptionSource": session.context.provider.rawValue,
         ]
         let preview = removedTexts.prefix(24).joined(separator: " ")
         if !preview.isEmpty { extra["removedText"] = removedTexts.count > 24 ? preview + " …" : preview }
@@ -126,15 +140,46 @@ extension ToolExecutor {
     }
 
     func removeSilence(_ editor: EditorViewModel, _ args: [String: Any]) throws -> ToolResult {
-        try validateUnknownKeys(args, allowed: [], path: "remove_silence")
-        let snapshot = timelineSnapshot(editor)
-        editor.undoManager?.beginUndoGrouping()
-        let result = editor.removeAllDeadAir()
-        editor.undoManager?.endUndoGrouping()
-        guard let result else {
-            throw ToolError("No dead air on the timeline. Speech analysis may still be running, or the audio has no quiet non-speech sections.")
+        let settings = try Self.parseSilenceRemovalSettings(
+            args,
+            defaults: editor.silenceRemovalSettings
+        )
+        let clipIds: [String]?
+        if let rawClipIds = args["clipIds"] {
+            guard let values = rawClipIds as? [Any], !values.isEmpty else {
+                throw ToolError("remove_silence: clipIds must be a non-empty array of clip IDs.")
+            }
+            var seen = Set<String>()
+            clipIds = try values.enumerated().compactMap { index, raw in
+                guard let value = raw as? String,
+                      !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    throw ToolError("remove_silence: clipIds[\(index)] must be a non-empty string.")
+                }
+                guard editor.findClip(id: value) != nil else {
+                    throw ToolError("Clip not found: \(value)")
+                }
+                return seen.insert(value).inserted ? value : nil
+            }
+        } else {
+            clipIds = nil
         }
-        editor.undoManager?.setActionName("Remove Silence (Agent)")
+        let snapshot = timelineSnapshot(editor)
+        let result: (sections: Int, removedFrames: Int, refusal: String?)?
+        do {
+            result = try editor.undo.perform("Remove Silence (Agent)") {
+                if let clipIds {
+                    try editor.removeDeadAir(clipIds: clipIds, settings: settings)
+                } else {
+                    editor.removeAllDeadAir(settings: settings)
+                }
+            }
+        } catch let error as DeadAirSelectionError {
+            throw ToolError("remove_silence: \(error.message)")
+        }
+        guard let result else {
+            let scope = clipIds == nil ? "on the timeline" : "in the selected clips"
+            throw ToolError("No dead air \(scope). Speech analysis may still be running, or the audio has no quiet non-speech sections.")
+        }
         if let refusal = result.refusal, result.sections == 0 {
             throw ToolError("Ripple delete refused: \(refusal)")
         }
@@ -142,11 +187,58 @@ extension ToolExecutor {
         if let refusal = result.refusal {
             notes.append("A later track refused: \(refusal). Earlier tracks were already edited.")
         }
+        var extra: [String: Any] = [
+            "sectionsRemoved": result.sections,
+            "removedFrames": result.removedFrames,
+            "minimumPauseSeconds": settings.minimumPauseSeconds,
+            "speechPaddingSeconds": settings.speechPaddingSeconds,
+        ]
+        if let clipIds { extra["clipIds"] = clipIds }
         return mutationResult(
             editor, since: snapshot,
-            extra: ["sectionsRemoved": result.sections, "removedFrames": result.removedFrames],
+            extra: extra,
             notes: notes
         )
+    }
+
+    static func parseSilenceRemovalSettings(
+        _ args: [String: Any],
+        defaults: SilenceRemovalSettings
+    ) throws -> SilenceRemovalSettings {
+        try validateUnknownKeys(args, allowed: removeSilenceAllowedKeys, path: "remove_silence")
+
+        func value(
+            _ key: String,
+            fallback: Double,
+            range: ClosedRange<Double>
+        ) throws -> Double {
+            guard args[key] != nil else { return fallback }
+            guard let value = args.double(key), value.isFinite, range.contains(value) else {
+                throw ToolError(
+                    "remove_silence: \(key) must be a finite number from "
+                    + "\(range.lowerBound) through \(range.upperBound)."
+                )
+            }
+            return value
+        }
+
+        let minimumPause = try value(
+            "minimumPauseSeconds",
+            fallback: defaults.minimumPauseSeconds,
+            range: SilenceRemovalSettings.minimumPauseRange
+        )
+        let speechPadding = try value(
+            "speechPaddingSeconds",
+            fallback: defaults.speechPaddingSeconds,
+            range: SilenceRemovalSettings.speechPaddingRange
+        )
+        guard let settings = SilenceRemovalSettings(
+            minimumPauseSeconds: minimumPause,
+            speechPaddingSeconds: speechPadding
+        ) else {
+            throw ToolError("remove_silence: invalid silence-removal settings.")
+        }
+        return settings
     }
 
     static func parseWordSpans(_ raw: [Any]) throws -> [(Int, Int)] {

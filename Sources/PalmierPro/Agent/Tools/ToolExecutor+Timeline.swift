@@ -14,6 +14,14 @@ extension ToolExecutor {
         if let tracks = dict["tracks"] as? [[String: Any]] {
             dict["tracks"] = Self.compactTracks(tracks, editor: editor, window: window, captionDetail: captionDetail)
         }
+        let markers = editor.displayedTimelineMarkers().filter { marker in
+            window.map(marker.intersects) ?? true
+        }
+        if markers.isEmpty {
+            dict.removeValue(forKey: "markers")
+        } else {
+            dict["markers"] = markers.map(Self.timelineMarkerDict)
+        }
         dict["totalFrames"] = editor.timeline.totalFrames
         dict["durationSeconds"] = Double(editor.timeline.totalFrames) / Double(max(editor.timeline.fps, 1))
         if let window {
@@ -47,6 +55,55 @@ extension ToolExecutor {
         try? JSONSerialization.jsonObject(with: JSONEncoder().encode(timeline)) as? [String: Any]
     }
 
+    static func focusedRawTracks(
+        _ editor: EditorViewModel,
+        clipIds: Set<String> = [],
+        captionGroupIds: Set<String> = []
+    ) -> [[String: Any]] {
+        var linkGroupIds = Set<String>()
+        var includedCaptionGroupIds = captionGroupIds
+        for track in editor.timeline.tracks {
+            for clip in track.clips where clipIds.contains(clip.id) {
+                if let linkGroupId = clip.linkGroupId {
+                    linkGroupIds.insert(linkGroupId)
+                }
+                if let captionGroupId = clip.captionGroupId {
+                    includedCaptionGroupIds.insert(captionGroupId)
+                }
+            }
+        }
+
+        return editor.timeline.tracks.map { track in
+            let clips = track.clips.filter { clip in
+                clipIds.contains(clip.id)
+                    || clip.captionGroupId.map(includedCaptionGroupIds.contains) == true
+                    || clip.linkGroupId.map(linkGroupIds.contains) == true
+            }
+            return [
+                "id": track.id,
+                "type": track.type.rawValue,
+                "clips": clips.compactMap(Self.rawClipDict),
+            ]
+        }
+    }
+
+    private static func rawClipDict(_ clip: Clip) -> [String: Any]? {
+        try? JSONSerialization.jsonObject(with: JSONEncoder().encode(clip)) as? [String: Any]
+    }
+
+    static func timelineMarkerDict(_ marker: TimelineMarker) -> [String: Any] {
+        [
+            "markerId": marker.id,
+            "name": marker.name,
+            "startFrame": marker.startFrame,
+            "endFrame": marker.endFrame,
+            "durationFrames": marker.durationFrames,
+            "color": marker.color.hexString,
+            "comment": marker.comment,
+            "status": marker.status.rawValue,
+        ]
+    }
+
     func timelineEntries(_ editor: EditorViewModel, detailed: Bool = false) -> [[String: Any]] {
         editor.timelines.map { t in
             var e: [String: Any] = ["timelineId": t.id, "name": t.name]
@@ -60,9 +117,11 @@ extension ToolExecutor {
     }
 
     static func frameWindow(_ args: [String: Any]) throws -> Range<Int>? {
-        guard args.int("startFrame") != nil || args.int("endFrame") != nil else { return nil }
-        let s = args.int("startFrame") ?? 0
-        let e = args.int("endFrame") ?? Int.max
+        let start = args.int("startFrame")
+        let end = args.int("endFrame").flatMap { $0 == 0 ? nil : $0 }
+        if end == nil, start == nil || start == 0 { return nil }
+        let s = start ?? 0
+        let e = end ?? Int.max
         guard s < e else {
             throw ToolError("Invalid window [\(s), \(e)): startFrame must be less than endFrame")
         }
@@ -77,16 +136,21 @@ extension ToolExecutor {
             guard let source = editor.timeline(for: fromRef) else {
                 throw ToolError("No timeline with id '\(fromRef)'. get_media lists the project's timelines.")
             }
-            guard let newId = editor.duplicateTimeline(fromRef) else {
-                throw ToolError("Couldn't duplicate \"\(source.name)\".")
+            id = try editor.undo.perform("Duplicate Timeline (Agent)") {
+                guard let newId = editor.duplicateTimeline(fromRef) else {
+                    throw ToolError("Couldn't duplicate \"\(source.name)\".")
+                }
+                if let name = args.string("name") { editor.renameTimeline(newId, to: name) }
+                return newId
             }
-            id = newId
-            if let name = args.string("name") { editor.renameTimeline(id, to: name) }
             note = "Duplicated \"\(source.name)\" and switched to the copy. Its clip and track ids are new — re-read get_timeline before editing."
         } else {
-            id = editor.createTimeline(name: args.string("name"))
+            id = editor.undo.perform("Create Timeline (Agent)") {
+                editor.createTimeline(name: args.string("name"))
+            }
             note = "Empty and now active; all edit tools target it."
         }
+        editor.revealTimelineTabBarIfMultiple()
         let payload: [String: Any] = [
             "timelineId": id,
             "name": editor.timeline(for: id)?.name ?? "",
@@ -116,6 +180,7 @@ extension ToolExecutor {
             editor.activateTimeline(target.id)
             payload["note"] = "Re-read get_timeline — clip and track ids from the previous timeline no longer apply."
         }
+        editor.revealTimelineTabBarIfMultiple()
         return .ok(Self.jsonString(payload) ?? "{}")
     }
 
@@ -154,7 +219,7 @@ extension ToolExecutor {
             // Report the displayed label (mirrored video numbering), not the stored seed.
             track["label"] = editor.timelineTrackDisplayLabel(at: i)
             track["index"] = i
-            track.removeValue(forKey: "id")
+            track["trackId"] = track.removeValue(forKey: "id")
             track.removeValue(forKey: "displayHeight")
             if let count = fold.foldedCountByTrack[i] { track["linkedClips"] = count }
             let gaps = trackGaps(editor.timeline.tracks[i])
@@ -225,7 +290,7 @@ extension ToolExecutor {
             }
         }
         let stripped = strippingDefaults(compactClipKeyframes(partner), clipDefaults)
-        for key in ["volume", "fadeInFrames", "fadeOutFrames", "fadeInInterpolation", "fadeOutInterpolation", "keyframes"] {
+        for key in ["volumeDb", "fadeInFrames", "fadeOutFrames", "fadeInInterpolation", "fadeOutInterpolation", "keyframes"] {
             if let v = stripped[key] { out[key] = v }
         }
         if let fx = stripped["effects"] as? [[String: Any]] {
@@ -308,7 +373,10 @@ extension ToolExecutor {
         out = strippingDefaults(out, clipDefaults)
         if let id = out["id"] as? String, let grade = grades[id] { out["color"] = grade }
         if let fx = out["effects"] as? [[String: Any]] {
-            let cleaned = compactEffects(fx)
+            let isText = out["mediaType"] as? String == ClipType.text.rawValue
+            let cleaned = compactEffects(fx).filter {
+                !isText || $0["type"] as? String != Effect.gaussianBlurType
+            }
             if cleaned.isEmpty { out.removeValue(forKey: "effects") } else { out["effects"] = cleaned }
         }
         let start = intValue(out["startFrame"])
@@ -319,7 +387,27 @@ extension ToolExecutor {
             out["audio"] = audioSummary(partner.clip, trackIndex: partner.trackIndex, visual: clip)
             out.removeValue(forKey: "linkGroupId")
         }
+        if clip["mediaType"] as? String == ClipType.text.rawValue {
+            shapeTextTransform(&out, from: clip)
+        }
         return out
+    }
+
+    private static func shapeTextTransform(_ output: inout [String: Any], from rawClip: [String: Any]) {
+        guard let rawTransform = rawClip["transform"] as? [String: Any],
+              let centerX = (rawTransform["centerX"] as? NSNumber)?.doubleValue,
+              let centerY = (rawTransform["centerY"] as? NSNumber)?.doubleValue,
+              let width = (rawTransform["width"] as? NSNumber)?.doubleValue else { return }
+        let rawAlignment = (rawClip["textStyle"] as? [String: Any])?["alignment"] as? String
+        let alignment = rawAlignment.flatMap(TextStyle.Alignment.init(rawValue:)) ?? .center
+        var transform = output["transform"] as? [String: Any] ?? [:]
+        transform.removeValue(forKey: "centerX")
+        transform.removeValue(forKey: "centerY")
+        transform.removeValue(forKey: "width")
+        transform.removeValue(forKey: "height")
+        transform["x"] = textAnchorX(centerX: centerX, width: width, alignment: alignment)
+        transform["y"] = centerY
+        output["transform"] = transform
     }
 
     /// Removes keys whose values equal the defaults; recurses into nested objects.
@@ -421,9 +509,14 @@ extension ToolExecutor {
 
     private static func compactClipKeyframes(_ clip: [String: Any]) -> [String: Any] {
         var out = clip
+        if let linearVolume = (clip["volume"] as? NSNumber)?.doubleValue {
+            out.removeValue(forKey: "volume")
+            let volumeDb = VolumeScale.dbFromLinear(linearVolume)
+            if !nearlyEqual([volumeDb], [0]) { out["volumeDb"] = volumeDb }
+        }
         var keyframes: [String: Any] = [:]
         for (trackKey, propKey, valueShape) in [
-            ("volumeTrack", "volume", KeyframeValueShape.scalar),
+            ("volumeTrack", "volumeDb", KeyframeValueShape.scalar),
             ("opacityTrack", "opacity", KeyframeValueShape.scalar),
             ("rotationTrack", "rotation", KeyframeValueShape.scalar),
             ("positionTrack", "position", KeyframeValueShape.pair),
@@ -435,17 +528,40 @@ extension ToolExecutor {
                   let kfs = track["keyframes"] as? [[String: Any]],
                   !kfs.isEmpty else { continue }
 
-            let values = kfs.map { valueShape.values(from: $0["value"]).map { ($0 as? NSNumber)?.doubleValue ?? 0 } }
+            let values = kfs.map { keyframe in
+                valueShape.values(from: keyframe["value"]).map { ($0 as? NSNumber)?.doubleValue ?? 0 }
+            }
             if let first = values.first, values.allSatisfy({ nearlyEqual($0, first) }),
                collapseConstantKeyframes(first, propKey: propKey, clip: clip, into: &out) {
                 continue
             }
 
-            keyframes[propKey] = kfs.map { kf -> [Any] in
+            keyframes[propKey] = zip(kfs, values).map { kf, exposedValues -> [Any] in
                 var row: [Any] = [kf["frame"] ?? 0]
-                row.append(contentsOf: valueShape.values(from: kf["value"]))
+                row.append(contentsOf: exposedValues)
                 if let interp = kf["interpolationOut"] as? String, interp != "smooth" {
                     row.append(interp)
+                }
+                return row
+            }
+        }
+        if let effects = clip["effects"] as? [[String: Any]],
+           let blurEffect = effects.first(where: {
+               $0["type"] as? String == Effect.gaussianBlurType
+           }),
+           let params = blurEffect["params"] as? [String: Any],
+           let radius = params[Effect.gaussianBlurRadiusKey] as? [String: Any],
+           let track = radius["track"] as? [String: Any],
+           let blurKeyframes = track["keyframes"] as? [[String: Any]],
+           !blurKeyframes.isEmpty {
+            keyframes["blur"] = blurKeyframes.map { keyframe -> [Any] in
+                var row: [Any] = [
+                    keyframe["frame"] ?? 0,
+                    (keyframe["value"] as? NSNumber)?.doubleValue ?? 0,
+                ]
+                if let interpolation = keyframe["interpolationOut"] as? String,
+                   interpolation != "smooth" {
+                    row.append(interpolation)
                 }
                 return row
             }
@@ -459,7 +575,12 @@ extension ToolExecutor {
         _ value: [Double], propKey: String, clip: [String: Any], into out: inout [String: Any]
     ) -> Bool {
         switch propKey {
-        case "volume", "opacity":
+        case "volumeDb":
+            if nearlyEqual(value, [0]) { return true }
+            guard (clip["volume"] as? NSNumber)?.doubleValue == 1 else { return false }
+            out[propKey] = value[0]
+            return true
+        case "opacity":
             if nearlyEqual(value, [1]) { return true }
             guard (clip[propKey] as? NSNumber)?.doubleValue == 1 else { return false }
             out[propKey] = value[0]

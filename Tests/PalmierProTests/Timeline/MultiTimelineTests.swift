@@ -114,7 +114,7 @@ struct MultiTimelineTests {
     @Test func deleteUndoRestoresTimelineAndTab() {
         let e = EditorViewModel()
         let undo = UndoManager()
-        e.undoManager = undo
+        e.undo.attach(undo)
         let secondId = e.createTimeline()
         e.timeline.tracks = [Fixtures.videoTrack()]
 
@@ -133,7 +133,7 @@ struct MultiTimelineTests {
     @Test func renameTrimsAndUndoes() {
         let e = EditorViewModel()
         let undo = UndoManager()
-        e.undoManager = undo
+        e.undo.attach(undo)
         let id = e.activeTimelineId
         let original = e.timeline.name
         e.renameTimeline(id, to: "  Selects  ")
@@ -152,6 +152,50 @@ struct MultiTimelineTests {
         #expect(e.timeline(for: secondId) != nil)   // closing a tab never deletes
         e.closeTimelineTab(firstId)
         #expect(e.openTimelineIds == [firstId])
+    }
+
+    @MainActor
+    @Test func closeAllTimelineTabsKeepsTheActiveTab() {
+        let e = EditorViewModel()
+        let firstId = e.activeTimelineId
+        _ = e.createTimeline()
+        let thirdId = e.createTimeline()
+        e.closeAllTimelineTabs()
+        #expect(e.openTimelineIds == [thirdId])
+        #expect(e.activeTimelineId == thirdId)
+        #expect(e.timeline(for: firstId) != nil)
+        e.closeAllTimelineTabs()
+        #expect(e.openTimelineIds == [thirdId])
+    }
+
+    @MainActor
+    @Test func selectAdjacentOpenTimelineWrapsAndRevealsTabs() {
+        let e = EditorViewModel()
+        #expect(e.selectAdjacentOpenTimeline(delta: 1) == false)
+        let firstId = e.activeTimelineId
+        let secondId = e.createTimeline()
+        e.timelineTabBarExpandedOverride = false
+        #expect(e.selectAdjacentOpenTimeline(delta: -1))
+        #expect(e.activeTimelineId == firstId)
+        #expect(e.isTimelineTabBarExpanded)
+        #expect(e.selectAdjacentOpenTimeline(delta: 1))
+        #expect(e.activeTimelineId == secondId)
+        #expect(e.selectAdjacentOpenTimeline(delta: 1))
+        #expect(e.activeTimelineId == firstId)
+    }
+
+    @MainActor
+    @Test func openAllTimelineTabsAppendsClosedTimelines() {
+        let e = EditorViewModel()
+        let firstId = e.activeTimelineId
+        let secondId = e.createTimeline()
+        e.closeTimelineTab(secondId)
+        #expect(e.openTimelineIds == [firstId])
+        e.openAllTimelineTabs()
+        #expect(e.openTimelineIds == [firstId, secondId])
+        #expect(e.activeTimelineId == firstId)
+        e.openAllTimelineTabs()
+        #expect(e.openTimelineIds == [firstId, secondId])
     }
 
     @Test func deleteMediaSweepsAllTimelines() {
@@ -177,7 +221,7 @@ struct MultiTimelineTests {
     @Test func settingsUndoLandsOnOwningTimeline() {
         let e = EditorViewModel()
         let undo = UndoManager()
-        e.undoManager = undo
+        e.undo.attach(undo)
         let firstId = e.activeTimelineId
         e.applyTimelineSettings(fps: 30, width: 1920, height: 1080)
         undo.removeAllActions()
@@ -207,7 +251,7 @@ struct MultiTimelineTests {
     @Test func deleteActiveTimelineUndoReactivatesWithFreshViewState() {
         let e = EditorViewModel()
         let undo = UndoManager()
-        e.undoManager = undo
+        e.undo.attach(undo)
         e.timeline.tracks = [Fixtures.videoTrack(clips: [Fixtures.clip(start: 0, duration: 900)])]
         let firstId = e.activeTimelineId
         _ = e.createTimeline()
@@ -225,13 +269,13 @@ struct MultiTimelineTests {
     @Test func timelineUndoReactivatesOwningTimeline() {
         let e = EditorViewModel()
         let undo = UndoManager()
-        e.undoManager = undo
+        e.undo.attach(undo)
         let aId = e.activeTimelineId
         let bId = e.createTimeline(activate: false)
         undo.removeAllActions()
 
         var undoneOnTimeline: String?
-        e.registerTimelineUndo { vm in undoneOnTimeline = vm.activeTimelineId }
+        e.registerTimelineUndo("Test Undo") { vm in undoneOnTimeline = vm.activeTimelineId }
         e.activateTimeline(bId)
         undo.undo()
 
@@ -265,7 +309,7 @@ struct MultiTimelineTests {
     @Test func moveTimelinesToFolderSetsParentAndUndoes() {
         let e = EditorViewModel()
         let undo = UndoManager()
-        e.undoManager = undo
+        e.undo.attach(undo)
         let folderId = e.createFolder(name: "Cuts")
         let tid = e.activeTimelineId
         undo.removeAllActions()
@@ -360,6 +404,44 @@ struct ProjectFilePersistenceTests {
         #expect(!file.timelines[0].id.isEmpty)
         #expect(file.timelines[0].name == "Timeline 1")
         #expect(file.timelines[0].settingsConfigured)
+    }
+
+    @MainActor
+    @Test func timelineTabBarFollowsTimelineCountUntilToggled() {
+        let e = EditorViewModel()
+        #expect(e.isTimelineTabBarExpanded == false)
+
+        e.createTimeline()
+        #expect(e.isTimelineTabBarExpanded == true)
+
+        e.toggleTimelineTabBarExpanded()
+        #expect(e.isTimelineTabBarExpanded == false)
+
+        e.createTimeline()
+        #expect(e.isTimelineTabBarExpanded == false)
+
+        e.toggleTimelineTabBarExpanded()
+        #expect(e.isTimelineTabBarExpanded == true)
+        e.deleteTimeline(e.activeTimelineId)
+        e.deleteTimeline(e.activeTimelineId)
+        #expect(e.timelines.count == 1)
+        #expect(e.isTimelineTabBarExpanded == false)
+    }
+
+    @MainActor
+    @Test func applyProjectFileResetsTimelineTabBarToCountDefault() {
+        let e = EditorViewModel()
+        e.toggleTimelineTabBarExpanded()
+        #expect(e.isTimelineTabBarExpanded == true)
+
+        let single = Fixtures.timeline()
+        e.applyProjectFile(ProjectFile(timelines: [single], activeTimelineId: single.id, openTimelineIds: [single.id]))
+        #expect(e.isTimelineTabBarExpanded == false)
+
+        let a = Fixtures.timeline()
+        let b = Fixtures.timeline()
+        e.applyProjectFile(ProjectFile(timelines: [a, b], activeTimelineId: a.id, openTimelineIds: [a.id, b.id]))
+        #expect(e.isTimelineTabBarExpanded == true)
     }
 
     @MainActor

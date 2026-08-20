@@ -9,17 +9,18 @@ struct OpenAICompatTests {
         "data: " + String(data: try! JSONSerialization.data(withJSONObject: obj), encoding: .utf8)!
     }
 
-    private func tok(_ event: AnthropicStreamEvent) -> String {
+    private func tok(_ event: AgentStreamEvent) -> String {
         switch event {
         case .textDelta(let s): "text:\(s)"
         case .toolUseComplete(let id, let name, let json): "tool:\(id):\(name):\(json)"
         case .messageStop(let reason): "stop:\(reason.rawValue)"
+        default: "unexpected"
         }
     }
 
     private func decode(_ lines: [String]) -> (tokens: [String], error: String?) {
         var decoder = OpenAISSEDecoder()
-        var out: [AnthropicStreamEvent] = []
+        var out: [AgentStreamEvent] = []
         for line in lines {
             let step = decoder.consume(line)
             if let error = step.error { return (out.map(tok), error) }
@@ -78,16 +79,20 @@ struct OpenAICompatTests {
     }
 
     @Test func requestBodyTranslation() {
-        let body = OpenAIRequestBody.build(
+        let body = GatewayChatRequestBody.build(
             model: "m",
             maxTokens: 100,
             system: "sys",
-            tools: [AnthropicToolSchema(name: "t", description: "d", inputSchema: ["type": "object"])],
+            tools: [AgentToolSchema(name: "t", description: "d", inputSchema: ["type": "object"])],
             messages: [
-                AnthropicMessage(role: .user, content: [["type": "text", "text": "hi"]]),
-                AnthropicMessage(role: .assistant, content: [["type": "tool_use", "id": "call_9", "name": "get_media", "input": ["q": "sunset"]]]),
-                AnthropicMessage(role: .user, content: [["type": "tool_result", "tool_use_id": "call_9", "content": [["type": "text", "text": "ok"]]]]),
-                AnthropicMessage(role: .user, content: [["type": "image", "source": ["type": "base64", "media_type": "image/png", "data": "AAAA"]]]),
+                AgentRequestMessage(role: .user, content: [.content(.text("hi"))]),
+                AgentRequestMessage(role: .assistant, content: [
+                    .content(.toolUse(id: "call_9", name: "get_media", inputJSON: "{\"q\":\"sunset\"}")),
+                ]),
+                AgentRequestMessage(role: .user, content: [
+                    .content(.toolResult(toolUseId: "call_9", content: [.text("ok")], isError: false)),
+                ]),
+                AgentRequestMessage(role: .user, content: [.image(base64: "AAAA", mediaType: "image/png")]),
             ]
         )
         let s = String(data: try! JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]), encoding: .utf8)!

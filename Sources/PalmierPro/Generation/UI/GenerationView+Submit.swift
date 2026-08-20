@@ -5,24 +5,36 @@ extension GenerationView {
 
     var canSubmit: Bool {
         guard canAffordGeneration else { return false }
-        if selectedType == .video && videoModel.requiresSourceVideo {
+        if selectedType == .upscale {
+            guard let source = upscaleSource,
+                  source.sourceWidth != nil, source.sourceHeight != nil,
+                  source.type != .video || source.sourceFPS != nil,
+                  enabledUpscaleModels.contains(where: { $0.index == selectedUpscaleModelIndex }) else { return false }
+            return upscaleModel.selectSettings.allSatisfy { setting in
+                let value = upscaleSettings.selections[setting.id] ?? setting.defaultValue
+                return availableUpscaleOptions(setting).contains(where: { $0.value == value })
+            }
+        }
+        if selectedType == .video && usesSourceVideoInput {
             guard sourceVideo != nil else { return false }
             if videoModel.requiresReferenceImage && imageReferences.isEmpty { return false }
-            if !videoModel.supportsReferences && isPromptEmpty { return false }
+            if videoModel.requiresReferenceAudio && refAudios.isEmpty { return false }
+            if videoModel.isLipSync && effectiveVideoSeconds == 0 { return false }
+            if videoModel.supportsPrompt && !videoModel.supportsReferences && isPromptEmpty { return false }
             return true
         }
         if selectedType == .video && videoModel.framesAndReferencesExclusive
-            && framesRefsMode == .reference && refImages.isEmpty
+            && videoInputMode == .references && refImages.isEmpty
             && refVideos.isEmpty && refAudios.isEmpty {
             return false
         }
         if selectedType == .audio {
-            if audioModel.acceptsSourceMedia {
+            if audioUsesSource {
                 guard audioSource != nil else { return false }
                 guard let languages = audioModel.targetLanguages else { return true }
                 return languages.contains(selectedTargetLanguage)
             }
-            return trimmedPrompt.count >= audioModel.minPromptLength
+            return trimmedPrompt.count >= max(1, audioModel.minPromptLength)
         }
         return !isPromptEmpty
     }
@@ -35,7 +47,9 @@ extension GenerationView {
                 model: videoModel,
                 durationSeconds: effectiveVideoSeconds,
                 resolution: effectiveResolution,
-                generateAudio: effectiveGenerateAudio
+                generateAudio: effectiveGenerateAudio,
+                draft: isDraftGeneration,
+                usesSourceVideo: usesSourceVideoInput
             )
         case .image:
             let quality = imageModel.qualities != nil ? selectedQuality : nil
@@ -46,11 +60,23 @@ extension GenerationView {
                 numImages: selectedNumImages
             )
         case .audio:
-            let duration: Int? = audioModel.acceptsSourceMedia
+            let duration: Int? = audioUsesSource
                 ? (audioSource == nil ? nil : effectiveAudioSourceSeconds)
-                : (audioModel.durations != nil ? selectedAudioDuration : nil)
+                : (audioModel.hasDurationControl ? selectedAudioDuration : nil)
             return CostEstimator.audioCost(
-                model: audioModel, prompt: trimmedPrompt, durationSeconds: duration
+                model: audioModel,
+                prompt: trimmedPrompt,
+                durationSeconds: duration,
+                input: activeAudioInput
+            )
+        case .upscale:
+            return CostEstimator.upscaleCost(
+                model: upscaleModel,
+                durationSeconds: effectiveUpscaleSeconds,
+                settings: upscaleSettings,
+                sourceWidth: upscaleSource?.sourceWidth,
+                sourceHeight: upscaleSource?.sourceHeight,
+                sourceFPS: upscaleSource?.sourceFPS
             )
         }
     }
@@ -73,22 +99,22 @@ extension GenerationView {
 
     private var costHelpText: String {
         guard let cost = estimatedCost else {
-            return "Estimated cost. Actual billing may differ slightly."
+            return L10n.string("Estimated cost. Actual billing may differ slightly.")
         }
         guard let left = remainingCredits else {
-            return "\(cost) credits estimated. Actual billing may differ."
+            return CostEstimator.localizedEstimate(cost)
         }
         if cost > left {
-            return "\(cost) credits needed. Only \(left.formatted()) remaining."
+            return CostEstimator.localizedInsufficientCredits(cost, remaining: left)
         }
-        return "\(cost) credits. \((left - cost).formatted()) credits remaining after this generation."
+        return CostEstimator.localizedRemainingCredits(cost, remaining: left - cost)
     }
 
     var costEstimateLabel: some View {
         HStack(spacing: AppTheme.Spacing.xs) {
             Image(systemName: "dollarsign.circle.fill")
                 .font(.system(size: AppTheme.FontSize.sm))
-            Text(estimatedCost.map { $0.formatted() } ?? "—")
+            Text(verbatim: estimatedCost.map { $0.formatted() } ?? "—")
                 .font(.system(size: AppTheme.FontSize.xs, weight: .medium))
                 .monospacedDigit()
                 .lineLimit(1)
@@ -110,18 +136,27 @@ extension GenerationView {
         .buttonBorderShape(.circle)
         .controlSize(.regular)
         .tint(AppTheme.Accent.primary)
+        .accessibilityLabel(aiAllowed
+            ? (selectedType == .upscale ? L10n.string("Upscale") : L10n.string("Generate"))
+            : L10n.string("Sign in"))
         .disabled(aiAllowed ? !canSubmit : account.isMisconfigured || account.isSigningIn)
         .opacity((aiAllowed ? canSubmit : !account.isMisconfigured && !account.isSigningIn) ? AppTheme.Opacity.opaque : AppTheme.Opacity.strong)
-        .help(aiAllowed ? "" : (account.isMisconfigured ? "AI is unavailable" : account.isSigningIn ? "Opening Google" : "Sign in to generate"))
+        .help(aiAllowed
+            ? (selectedType == .upscale ? L10n.string("Upscale source media") : String())
+            : (account.isMisconfigured
+                ? L10n.string("AI is unavailable")
+                : account.isSigningIn ? L10n.string("Opening Google") : L10n.string("Sign in to generate")))
     }
 
     // MARK: - Actions
 
     func videoInputAssets(for model: VideoModelConfig) -> VideoGenerationSubmission.InputAssets {
-        if model.requiresSourceVideo {
+        if usesSourceVideoInput {
             return VideoGenerationSubmission.InputAssets(
                 sourceVideo: sourceVideo,
-                imageRefs: model.supportsReferences ? Array(imageReferences.prefix(1)) : []
+                imageRefs: Array(imageReferences.prefix(model.maxReferenceImages)),
+                videoRefs: Array(refVideos.prefix(model.maxReferenceVideos)),
+                audioRefs: Array(refAudios.prefix(model.maxReferenceAudios))
             )
         }
 
@@ -138,21 +173,45 @@ extension GenerationView {
         )
     }
 
+    /// Matches GenerationService: the trim rewrites the first uploaded reference whose URL matches it.
+    func pendingTrimmedSource(
+        for model: VideoModelConfig,
+        inputAssets: VideoGenerationSubmission.InputAssets
+    ) -> TrimmedSource? {
+        guard let trim = editor.pendingEditTrimmedSource, trim.hasTrim else { return nil }
+        if model.requiresSourceVideo || inputAssets.sourceVideo != nil {
+            guard let source = inputAssets.sourceVideo ?? sourceVideo,
+                  trim.sourceURL == source.url else { return nil }
+            return trim
+        }
+        guard let match = inputAssets.textToVideoReferences.first(where: { $0.url == trim.sourceURL }),
+              match.type == .video else { return nil }
+        return trim
+    }
+
+    func audioInputAssets(for model: AudioModelConfig) -> AudioGenerationSubmission.InputAssets {
+        guard model.supportsReferences else { return AudioGenerationSubmission.InputAssets() }
+        return AudioGenerationSubmission.InputAssets(imageRefs: refImages, audioRefs: refAudios)
+    }
+
     private func preflightValidation(audioDuration: Int) -> String? {
         switch selectedType {
         case .video:
             let inputAssets = videoInputAssets(for: videoModel)
-            let modelError: String?
-            if videoModel.requiresSourceVideo {
-                modelError = videoModel.validate(duration: 0, aspectRatio: "", resolution: nil)
-            } else {
-                modelError = videoModel.validate(
+            let trimmedSource = pendingTrimmedSource(for: videoModel, inputAssets: inputAssets)
+            let modelError = usesSourceVideoInput
+                ? videoModel.validateSourceDuration(effectiveSourceVideoSeconds)
+                    ?? videoModel.validate(
+                        duration: videoModel.usesOutputDuration ? selectedDuration : 0,
+                        aspectRatio: videoModel.usesOutputDuration ? selectedAspectRatio : "",
+                        resolution: videoModel.usesOutputDuration ? effectiveResolution : nil
+                    )
+                : videoModel.validate(
                     duration: selectedDuration,
                     aspectRatio: selectedAspectRatio,
                     resolution: effectiveResolution
                 )
-            }
-            return modelError ?? inputAssets.validate(for: videoModel)
+            return modelError ?? inputAssets.validate(for: videoModel, trimmedSource: trimmedSource)
         case .image:
             let quality = imageModel.qualities != nil ? selectedQuality : nil
             let imageCount = imageModel.maxImages > 1
@@ -165,12 +224,29 @@ extension GenerationView {
                 numImages: imageCount
             )
         case .audio:
-            if audioModel.acceptsSourceMedia {
-                guard audioSource != nil else { return "Add source media." }
+            let inputAssets = audioInputAssets(for: audioModel)
+            if audioUsesSource {
+                guard audioSource != nil else { return L10n.string("Add source media.") }
                 return audioModel.validate(spanSeconds: effectiveAudioSourceSpanSeconds)
                     ?? audioModel.validate(params: audioParams(audioDuration: audioDuration))
             }
             return audioModel.validate(params: audioParams(audioDuration: audioDuration))
+                ?? inputAssets.validate(for: audioModel)
+        case .upscale:
+            guard let source = upscaleSource else { return L10n.string("Add source media.") }
+            guard upscaleModel.supportedTypes.contains(source.type) else {
+                return L10n.string("\(upscaleModel.displayName) does not support this media type.")
+            }
+            guard source.sourceWidth != nil, source.sourceHeight != nil else {
+                return L10n.string("Loading source dimensions…")
+            }
+            if source.type == .video {
+                guard source.sourceFPS != nil else { return L10n.string("Loading source frame rate…") }
+                guard upscaleModel.supports(source: source) else {
+                    return L10n.string("This model cannot cap the output at 60 FPS.")
+                }
+            }
+            return nil
         }
     }
 
@@ -182,10 +258,11 @@ extension GenerationView {
             styleInstructions: audioModel.supportsStyleInstructions && !styleInstructions.isEmpty
                 ? styleInstructions : nil,
             instrumental: audioModel.supportsInstrumental ? instrumental : false,
-            durationSeconds: (audioModel.durations != nil || audioModel.acceptsSourceMedia) ? audioDuration : nil,
+            durationSeconds: (audioModel.hasDurationControl || audioModel.acceptsSourceMedia) ? audioDuration : nil,
             videoURL: videoURL,
             sourceURL: nil,
-            targetLanguage: audioModel.targetLanguages != nil ? selectedTargetLanguage : nil
+            targetLanguage: audioModel.targetLanguages != nil ? selectedTargetLanguage : nil,
+            multilingual: audioModel.supportsMultilingual ? multilingual : nil
         )
     }
 
@@ -196,17 +273,23 @@ extension GenerationView {
         }
         let audioDuration: Int = {
             guard selectedType == .audio else { return 0 }
-            if audioModel.acceptsSourceMedia { return effectiveAudioSourceSeconds }
-            return audioModel.durations != nil ? selectedAudioDuration : 0
+            if audioUsesSource { return effectiveAudioSourceSeconds }
+            return audioModel.hasDurationControl ? selectedAudioDuration : 0
         }()
         if let err = preflightValidation(audioDuration: audioDuration) {
             flashDropError(err)
             return
         }
+        let inputDuration: Int = switch selectedType {
+        case .video: effectiveVideoSeconds
+        case .audio: audioDuration
+        case .upscale: effectiveUpscaleSeconds
+        case .image: 0
+        }
         var genInput = GenerationInput(
             prompt: prompt,
             model: currentModelId,
-            duration: selectedType == .video ? effectiveVideoSeconds : audioDuration,
+            duration: inputDuration,
             aspectRatio: selectedAspectRatio,
             resolution: effectiveResolution,
             quality: selectedType == .image && imageModel.qualities != nil ? selectedQuality : nil,
@@ -220,7 +303,11 @@ extension GenerationView {
                 ? instrumental : nil,
             targetLanguage: selectedType == .audio && audioModel.targetLanguages != nil
                 ? selectedTargetLanguage : nil,
-            generateAudio: supportsAudioToggle ? generateAudio : nil
+            multilingual: selectedType == .audio && audioModel.supportsMultilingual
+                ? multilingual : nil,
+            generateAudio: supportsAudioToggle ? generateAudio : nil,
+            draft: supportsDraftToggle ? videoDraft : nil,
+            usesSourceVideo: selectedType == .video ? usesSourceVideoInput : nil
         )
         let imageCount: Int = {
             guard selectedType == .image, imageModel.maxImages > 1 else { return 1 }
@@ -229,11 +316,13 @@ extension GenerationView {
         if imageCount > 1 {
             genInput.numImages = imageCount
         }
+        if selectedType == .audio {
+            genInput.audioInput = activeAudioInput.rawValue
+        }
 
         let replacementClipId = editor.pendingEditReplacementClipId
-        editor.pendingEditReplacementClipId = nil
         let pendingAudioPlacement = selectedType == .audio ? editor.pendingEditAudioPlacement : nil
-        editor.pendingEditAudioPlacement = nil
+        let transitionPlacement = selectedType == .video ? editor.pendingEditTransitionPlacement : nil
         let editorRef = editor
         if let clipId = replacementClipId {
             editor.markPendingReplacement(clipId: clipId)
@@ -263,29 +352,25 @@ extension GenerationView {
         case .video:
             let model = videoModel
             let inputAssets = videoInputAssets(for: model)
-            let trimmedSource: TrimmedSource? = {
-                guard model.requiresSourceVideo,
-                      let trim = editor.pendingEditTrimmedSource,
-                      let sv = sourceVideo,
-                      trim.sourceURL == sv.url else { return nil }
-                return trim
-            }()
-            editor.pendingEditTrimmedSource = nil
-            let placeholderDuration: Double
-            if model.requiresSourceVideo {
-                if let trim = trimmedSource, trim.hasTrim {
-                    placeholderDuration = trim.durationSeconds
-                } else {
-                    placeholderDuration = sourceVideo?.duration ?? 5
-                }
-            } else {
-                placeholderDuration = Double(selectedDuration)
-            }
+            let trimmedSource = pendingTrimmedSource(for: model, inputAssets: inputAssets)
+            let placeholderDuration = usesSourceVideoInput
+                ? (model.usesOutputDuration
+                    ? Double(selectedDuration)
+                    : effectiveSourceVideoSeconds)
+                : (trimmedSource?.durationSeconds ?? Double(selectedDuration))
             let videoFolderId: String? = editFolderId ?? (
-                model.requiresSourceVideo
+                usesSourceVideoInput
                     ? (inputAssets.sourceVideo?.folderId ?? inputAssets.imageRefs.last?.folderId)
                     : inputAssets.textToVideoReferences.last?.folderId
             ) ?? editor.mediaPanelCurrentFolderId
+            let baseOnComplete = makeOnComplete(trimmedSource?.hasTrim == true)
+            let videoOnComplete: (@MainActor (MediaAsset) -> Void)? = {
+                guard transitionPlacement != nil else { return baseOnComplete }
+                return { [weak editorRef] asset in
+                    editorRef?.finalizeTransitionClip(placeholderId: asset.id, asset: asset)
+                    baseOnComplete?(asset)
+                }
+            }()
             let videoAssetId = VideoGenerationSubmission.make(
                 genInput: genInput,
                 model: model,
@@ -298,9 +383,12 @@ extension GenerationView {
                 service: editor.generationService,
                 projectURL: editor.projectURL,
                 editor: editor,
-                onComplete: makeOnComplete(trimmedSource?.hasTrim == true),
+                onComplete: videoOnComplete,
                 onFailure: onFailure
             )
+            if let placement = transitionPlacement {
+                editor.placeGeneratingTransitionClip(placeholderId: videoAssetId, placement: placement)
+            }
             autoOpenPreview(videoAssetId)
         case .image:
             let model = imageModel
@@ -320,6 +408,7 @@ extension GenerationView {
             autoOpenPreview(imageAssetId)
         case .audio:
             let model = audioModel
+            let inputAssets = audioInputAssets(for: model)
             let onCompleteAudio = makeOnComplete(false)
             let sourceAsset = model.acceptsSourceMedia ? audioSource : nil
             if let sourceAsset {
@@ -338,8 +427,10 @@ extension GenerationView {
                 params: audioParams(audioDuration: audioDuration),
                 folderId: editFolderId
                     ?? sourceAsset?.folderId
+                    ?? inputAssets.references.last?.folderId
                     ?? editor.mediaPanelCurrentFolderId,
-                references: sourceAsset.map { [$0] } ?? [],
+                references: model.supportsReferences
+                    ? inputAssets.references : sourceAsset.map { [$0] } ?? [],
                 trimmedSourceOverride: sourceAsset.flatMap(audioSourceTrimmedSource)
             ).submit(
                 service: editor.generationService,
@@ -356,8 +447,25 @@ extension GenerationView {
                     actionName: placement.actionName
                 )
             }
+        case .upscale:
+            guard let source = upscaleSource else { return }
+            let trim: TrimmedSource? = {
+                guard let pending = editor.pendingEditTrimmedSource,
+                      pending.sourceURL == source.url else { return nil }
+                return pending
+            }()
+            let assetId = EditSubmitter.submitUpscale(
+                asset: source,
+                model: upscaleModel,
+                editor: editor,
+                settings: upscaleSettings,
+                trimmedSource: trim,
+                onComplete: makeOnComplete(trim?.hasTrim == true),
+                onFailure: onFailure
+            )
+            if let assetId { autoOpenPreview(assetId) }
         }
-        editor.pendingEditTrimmedSource = nil
+        editor.clearPendingGenerationPanelState()
         lyrics = ""
         styleInstructions = ""
         prompt = ""
@@ -390,7 +498,12 @@ extension GenerationView {
             isPopulatingPanel = true
             selectedType = .audio
             selectedAudioModelIndex = idx
-        case .upscale, .none:
+        case .upscale:
+            guard let idx = upscaleModels.firstIndex(where: { $0.id == stored.model }) else { return }
+            isPopulatingPanel = true
+            selectedType = .upscale
+            selectedUpscaleModelIndex = idx
+        case .none:
             return
         }
         defer { DispatchQueue.main.async { isPopulatingPanel = false } }
@@ -411,10 +524,15 @@ extension GenerationView {
         } else if selectedType == .audio {
             selectedTargetLanguage = initialAudioTargetLanguage
         }
+        multilingual = stored.multilingual ?? false
         lyrics = stored.lyrics ?? ""
         styleInstructions = stored.styleInstructions ?? ""
         instrumental = stored.instrumental ?? false
         generateAudio = stored.generateAudio ?? true
+        videoDraft = stored.draft ?? false
+        if selectedType == .upscale {
+            upscaleSettings = stored.upscaleSettings ?? upscaleModel.defaultSettings
+        }
 
         clearReferences()
 
@@ -424,9 +542,15 @@ extension GenerationView {
 
         switch selectedType {
         case .video:
-            if videoModel.requiresSourceVideo {
+            let storedUsesSourceVideo = videoModel.requiresSourceVideo
+                || stored.usesSourceVideo == true
+            videoInputMode = storedUsesSourceVideo ? .sourceVideo : .frames
+            if storedUsesSourceVideo {
                 sourceVideo = primary.first
-                if videoModel.supportsReferences, primary.count > 1 {
+                imageReferences = (stored.referenceImageAssetIds ?? []).compactMap(lookup)
+                refVideos = (stored.referenceVideoAssetIds ?? []).compactMap(lookup)
+                refAudios = (stored.referenceAudioAssetIds ?? []).compactMap(lookup)
+                if imageReferences.isEmpty, videoModel.maxReferenceImages > 0, primary.count > 1 {
                     imageReferences = [primary[1]]
                 }
             } else {
@@ -440,37 +564,61 @@ extension GenerationView {
                 refVideos = (stored.referenceVideoAssetIds ?? []).compactMap(lookup)
                 refAudios = (stored.referenceAudioAssetIds ?? []).compactMap(lookup)
                 if videoModel.framesAndReferencesExclusive {
-                    framesRefsMode = (!refImages.isEmpty || !refVideos.isEmpty || !refAudios.isEmpty)
-                        ? .reference : .firstLast
+                    videoInputMode = (!refImages.isEmpty || !refVideos.isEmpty || !refAudios.isEmpty)
+                        ? .references : .frames
                 } else {
-                    framesRefsMode = .firstLast
+                    videoInputMode = .frames
                 }
             }
         case .image:
             imageReferences = primary
         case .audio:
-            audioSource = (stored.referenceAudioAssetIds ?? []).compactMap(lookup).first
-                ?? (stored.referenceVideoAssetIds ?? []).compactMap(lookup).first
+            if audioModel.supportsReferences {
+                refImages = (stored.referenceImageAssetIds ?? []).compactMap(lookup)
+                refAudios = (stored.referenceAudioAssetIds ?? []).compactMap(lookup)
+            } else {
+                audioSource = (stored.referenceAudioAssetIds ?? []).compactMap(lookup).first
+                    ?? (stored.referenceVideoAssetIds ?? []).compactMap(lookup).first
+            }
+        case .upscale:
+            upscaleSource = primary.first ?? asset
         }
 
         editFolderId = asset.folderId
 
-        resetSettings()
+        if selectedType == .upscale {
+            upscaleSettings = upscaleModel.normalizedSettings(upscaleSettings, source: upscaleSource)
+        } else {
+            resetSettings()
+        }
     }
 
     func resetAudioState() {
         let model = audioModel
+        multilingual = false
         selectedVoice = model.defaultVoice ?? ""
         selectedTargetLanguage = initialAudioTargetLanguage
         if !model.supportsLyrics { lyrics = "" }
         if !model.supportsStyleInstructions { styleInstructions = "" }
         if !model.supportsInstrumental { instrumental = false }
-        if let durations = model.durations, !durations.contains(selectedAudioDuration) {
+        normalizeAudioDuration()
+    }
+
+    private func normalizeAudioDuration() {
+        let model = audioModel
+        if let range = model.durationRange,
+           !(range.minimum...range.maximum).contains(selectedAudioDuration) {
+            selectedAudioDuration = range.defaultValue
+        } else if let durations = model.durations, !durations.contains(selectedAudioDuration) {
             selectedAudioDuration = durations.first ?? 30
         }
     }
 
     func resetSettings() {
+        if selectedType == .upscale {
+            resetUpscaleSettings()
+            return
+        }
         if !currentAspectRatios.contains(selectedAspectRatio) {
             selectedAspectRatio = currentAspectRatios.first ?? "16:9"
         }
@@ -483,9 +631,22 @@ extension GenerationView {
         if selectedType == .video, !videoModel.durations.contains(selectedDuration) {
             selectedDuration = videoModel.durations.first ?? 5
         }
-        if selectedType == .video { generateAudio = true }
+        if selectedType == .video {
+            generateAudio = true
+            if !isPopulatingPanel {
+                videoInputMode = videoModel.requiresSourceVideo ? .sourceVideo : .frames
+            }
+            if !isPopulatingPanel || !videoModel.supportsDraft {
+                videoDraft = false
+            }
+        }
         if selectedType == .image {
             selectedNumImages = min(max(1, selectedNumImages), imageModel.maxImages)
         }
+        if selectedType == .audio { normalizeAudioDuration() }
+    }
+
+    func resetUpscaleSettings() {
+        upscaleSettings = upscaleModel.normalizedSettings(upscaleModel.defaultSettings, source: upscaleSource)
     }
 }

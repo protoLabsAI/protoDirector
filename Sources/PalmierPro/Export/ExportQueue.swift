@@ -109,6 +109,11 @@ final class ExportQueue {
         warnings: [String] = []
     ) throws -> ExportQueueSubmission {
         let resolver = resolver.snapshot()
+        let analyticsInput = ExportTimelineAnalyticsInput(
+            scope: .exportedTimeline(root: timeline, resolveTimeline: resolveTimeline),
+            manifest: resolver.manifestSnapshot(),
+            exportFilename: outputURL.lastPathComponent
+        )
         return try enqueue(outputURL: outputURL, projectID: projectID, source: source, warnings: warnings) { service in
             await service.export(
                 timeline: timeline,
@@ -120,7 +125,11 @@ final class ExportQueue {
                 fcpxmlTarget: fcpxmlTarget,
                 missingMediaRefs: missingMediaRefs,
                 outputURL: outputURL,
-                analyticsContext: ExportAnalyticsContext(source: source.rawValue, projectId: analyticsProjectID)
+                analyticsContext: ExportAnalyticsContext(
+                    source: source.rawValue,
+                    projectId: analyticsProjectID,
+                    timelineInput: analyticsInput
+                )
             )
         }
     }
@@ -129,21 +138,31 @@ final class ExportQueue {
     func enqueuePalmierProject(
         projectFile: ProjectFile,
         manifest: MediaManifest,
-        generationLog: GenerationLog,
         sourceProjectURL: URL?,
         outputURL: URL,
         source: ExportJobSource,
         projectID: String,
         analyticsProjectID: String?
     ) throws -> ExportQueueSubmission {
-        try enqueue(outputURL: outputURL, projectID: projectID, source: source) { service in
+        let analyticsInput = ExportTimelineAnalyticsInput(
+            scope: .project(
+                timelines: projectFile.timelines,
+                rootTimelineId: projectFile.activeTimelineId
+            ),
+            manifest: manifest,
+            exportFilename: outputURL.lastPathComponent
+        )
+        return try enqueue(outputURL: outputURL, projectID: projectID, source: source) { service in
             await service.exportPalmierProject(
                 projectFile: projectFile,
                 manifest: manifest,
-                generationLog: generationLog,
                 sourceProjectURL: sourceProjectURL,
                 outputURL: outputURL,
-                analyticsContext: ExportAnalyticsContext(source: source.rawValue, projectId: analyticsProjectID)
+                analyticsContext: ExportAnalyticsContext(
+                    source: source.rawValue,
+                    projectId: analyticsProjectID,
+                    timelineInput: analyticsInput
+                )
             )
         }
     }

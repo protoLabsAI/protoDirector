@@ -1,44 +1,66 @@
 import SwiftUI
 
 struct TitleTabBar: View {
-    let titles: [String]
+    struct Item: Identifiable {
+        let titleKey: String
+        let systemImage: String
+
+        var id: String { titleKey }
+    }
+
+    let items: [Item]
     let selected: String?
-    var raisedBackground: Bool = false
+    var tourAnchors: [String: TourAnchorID] = [:]
     let onSelect: (String) -> Void
 
     var body: some View {
-        HStack(spacing: AppTheme.Spacing.md) {
-            ForEach(titles, id: \.self) { title in
-                let isActive = selected == title
-                let isAI = title == "AI Edit"
-                let foreground: AnyShapeStyle = isAI
-                    ? AnyShapeStyle(AppTheme.aiGradient.opacity(isActive ? 1 : 0.6))
-                    : AnyShapeStyle(isActive ? AppTheme.Text.primaryColor : AppTheme.Text.tertiaryColor)
-                Button {
-                    onSelect(title)
-                } label: {
-                    VStack(spacing: AppTheme.Spacing.xs) {
-                        Text(title)
-                            .font(.system(size: AppTheme.FontSize.sm, weight: isActive ? .medium : .regular))
-                            .foregroundStyle(foreground)
-                        Rectangle()
-                            .fill(isActive ? foreground : AnyShapeStyle(Color.clear))
-                            .frame(height: AppTheme.BorderWidth.medium)
-                    }
-                    .padding(.vertical, AppTheme.Spacing.xs)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
+        HStack(spacing: AppTheme.Spacing.zero) {
+            ForEach(items) { item in
+                tab(item)
             }
-            Spacer()
         }
-        .padding(.horizontal, AppTheme.Spacing.lg)
-        .padding(.top, AppTheme.Spacing.xs)
-        .background(raisedBackground ? AppTheme.Background.raisedColor : Color.clear)
-        .overlay(alignment: .bottom) {
-            if raisedBackground {
-                Rectangle().fill(AppTheme.Border.primaryColor).frame(height: AppTheme.BorderWidth.thin)
+        .panelHeaderBar()
+    }
+
+    @ViewBuilder
+    private func tab(_ item: Item) -> some View {
+        let active = selected == item.id
+        let button = Button {
+            onSelect(item.id)
+        } label: {
+            VStack(spacing: AppTheme.Spacing.xxs) {
+                Image(systemName: item.systemImage)
+                    .font(.system(
+                        size: AppTheme.FontSize.xs,
+                        weight: active ? AppTheme.FontWeight.medium : AppTheme.FontWeight.regular
+                    ))
+                    .frame(width: AppTheme.IconSize.xxs, height: AppTheme.IconSize.xxs)
+                    .accessibilityHidden(true)
+                Text(L10n.string(key: item.titleKey))
+                    .font(.system(
+                        size: AppTheme.FontSize.xxs,
+                        weight: active ? AppTheme.FontWeight.medium : AppTheme.FontWeight.regular
+                    ))
             }
+            .lineLimit(1)
+            .foregroundStyle(active ? AppTheme.Text.primaryColor : AppTheme.Text.tertiaryColor)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(active ? AppTheme.Text.primaryColor : Color.clear)
+                    .frame(height: AppTheme.BorderWidth.thin)
+                    .offset(y: -AppTheme.BorderWidth.thin)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .accessibilityLabel(L10n.string(key: item.titleKey))
+        .accessibilityAddTraits(active ? .isSelected : [])
+        if let anchor = tourAnchors[item.id] {
+            button.tourAnchor(anchor)
+        } else {
+            button
         }
     }
 }

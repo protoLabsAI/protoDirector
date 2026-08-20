@@ -39,6 +39,7 @@ final class MediaVisualCache {
 
     private var videoThumbnails: [String: [(time: Double, image: CGImage)]] = [:]
     private var videoThumbnailInFlight: Set<String> = []
+    private static let videoThumbnailGate = AsyncSemaphore(value: 2)
 
     // MARK: - Image thumbnails (single still per asset)
 
@@ -49,6 +50,7 @@ final class MediaVisualCache {
     // MARK: - Redraw trigger
 
     weak var timelineView: NSView?
+    var onDeadAirCacheInvalidated: (() -> Void)?
 
     // MARK: - Sync lookups (safe for draw calls)
 
@@ -56,8 +58,15 @@ final class MediaVisualCache {
         MainActor.assumeIsolated { waveformSamples[mediaRef] }
     }
 
-    nonisolated func deadAirMask(for mediaRef: String) -> [Bool]? {
-        speech.deadAirMask(for: mediaRef, samples: samples(for: mediaRef))
+    nonisolated func deadAirMask(
+        for mediaRef: String,
+        settings: SilenceRemovalSettings
+    ) -> [Bool]? {
+        speech.deadAirMask(for: mediaRef, samples: samples(for: mediaRef), settings: settings)
+    }
+
+    nonisolated func quietNonSpeechMask(for mediaRef: String) -> [Bool]? {
+        speech.quietNonSpeechMask(for: mediaRef, samples: samples(for: mediaRef))
     }
 
     nonisolated func thumbnails(for mediaRef: String) -> [(time: Double, image: CGImage)]? {
@@ -100,6 +109,7 @@ final class MediaVisualCache {
         beats.reset()
         videoThumbnails.removeAll()
         imageThumbnails.removeAll()
+        onDeadAirCacheInvalidated?()
         timelineView?.needsDisplay = true
     }
 
@@ -111,6 +121,7 @@ final class MediaVisualCache {
         beats.invalidate(mediaRef)
         videoThumbnails.removeValue(forKey: mediaRef)
         imageThumbnails.removeValue(forKey: mediaRef)
+        onDeadAirCacheInvalidated?()
     }
 
     func generateImageThumbnail(for asset: MediaAsset) {
@@ -147,6 +158,14 @@ final class MediaVisualCache {
 
         let url = asset.url
         Task.detached(priority: .userInitiated) { [weak self] in
+            do {
+                try await Self.videoThumbnailGate.wait()
+            } catch {
+                await MainActor.run { [weak self] in _ = self?.videoThumbnailInFlight.remove(key) }
+                return
+            }
+            defer { Task { await Self.videoThumbnailGate.signal() } }
+
             let cacheKey = Self.diskCacheKey(for: url)
             var results = cacheKey.flatMap(Self.loadThumbnails(key:)) ?? []
 

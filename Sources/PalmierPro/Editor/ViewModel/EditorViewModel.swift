@@ -18,6 +18,13 @@ struct PendingAudioPlacement {
     let actionName: String
 }
 
+struct PendingTransitionPlacement {
+    let timelineId: String
+    let trackIndex: Int
+    let gapStartFrame: Int
+    let gapLengthFrames: Int
+}
+
 @Observable
 @MainActor
 final class EditorViewModel {
@@ -25,12 +32,40 @@ final class EditorViewModel {
     // MARK: - Persisted state (synced with VideoProject)
 
     var timelines: [Timeline] {
-        didSet { timelineRenderRevision &+= 1 }
+        didSet {
+            timelineRenderRevision &+= 1
+            let source = Analytics.origin?.source
+            if source != "agent", source != "mcp" {
+                nonAgentTimelineMutationRevision &+= 1
+            }
+            if pendingSwapClipId != nil { cancelMediaSwap() }
+        }
     }
+    @ObservationIgnored var nonAgentTimelineMutationRevision = 0
     var activeTimelineId: String
     var openTimelineIds: [String]
     @ObservationIgnored var liveViewStates: [String: TimelineViewState] = [:]
     var timelineTabRenameRequest: String?
+    var timelineTabBarExpandedOverride: Bool?
+
+    var isTimelineTabBarExpanded: Bool {
+        timelineTabBarExpandedOverride ?? (timelines.count > 1)
+    }
+
+    func toggleTimelineTabBarExpanded() {
+        timelineTabBarExpandedOverride = !isTimelineTabBarExpanded
+    }
+
+    func revealTimelineTabBarIfMultiple() {
+        guard timelines.count > 1 else { return }
+        timelineTabBarExpandedOverride = true
+    }
+
+    static func adjacentId(in ids: [String], current: String, delta: Int) -> String? {
+        guard ids.count > 1, let index = ids.firstIndex(of: current) else { return nil }
+        let count = ids.count
+        return ids[((index + delta) % count + count) % count]
+    }
 
     /// Active-timeline proxy; assignment routes by id and activates so undo lands on its timeline.
     var timeline: Timeline {
@@ -53,8 +88,6 @@ final class EditorViewModel {
         }
     }
     var mediaManifest = MediaManifest()
-    var generationLog = GenerationLog()
-
     // MARK: - Denoise bake state (session-scoped, keyed by mediaRef)
 
     var denoiseInFlight: Set<String> = []
@@ -62,7 +95,11 @@ final class EditorViewModel {
     var denoiseBaked: Set<String> = []
     var speechAnalyzingCount: Int = 0
     var speakerRegistry: [SpeakerRegistryEntry] = []
-    var multicamGroups: [MulticamSource] = []
+    var multicamGroups: [MulticamSource] = [] {
+        didSet {
+            if multicamGroups != oldValue { deadAirMaskCache.reset() }
+        }
+    }
     var speakerAssignments: [String: [String: Int]] = [:]
     var speakerIdentifyPhase: String?
     var speakerIdentifyInFlight: Bool { speakerIdentifyPhase != nil }
@@ -87,6 +124,7 @@ final class EditorViewModel {
     // MARK: - Tutorial tour
 
     let tour = TourController()
+    var inspectorClipTabRequest: InspectorView.ClipTab?
 
     // MARK: - Transient UI state
 
@@ -95,14 +133,18 @@ final class EditorViewModel {
     }
     var activeFrame: Int { playheadState.timelineFrame }
     var isPlaying: Bool = false
+    private(set) var playbackRate: PreviewPlaybackRate = .normal
     var selectedClipIds: Set<String> = []
     var isMarqueeSelecting: Bool = false
     var selectedGap: GapSelection?
     var selectedTimelineRange: TimelineRangeSelection?
+    var selectedTimelineMarkerIds: Set<String> = []
+    var timelineMarkerPreview: TimelineMarker?
     var selectedMediaAssetIds: Set<String> = []
     var selectedFolderIds: Set<String> = []
     var selectedTimelineIds: Set<String> = []
     var pendingSwapClipId: String?
+    @ObservationIgnored var pendingSwapTargetClipIds: [String] = []
     var clipClipboard: [ClipClipboardEntry] = []
     var zoomScale: Double = Defaults.pixelsPerFrame
     var canvasZoom: CGFloat = 1.0 {
@@ -111,8 +153,16 @@ final class EditorViewModel {
         }
     }
     var canvasOffset: CGSize = .zero
+    var rotationSnapGuidesVisible: Bool = false
     var timelineVisibleWidth: Double = 0
     var timelineRenderRevision: Int = 0
+    var timelineCompositionGeneration: Int = 0
+    @ObservationIgnored private var clipLocationIndexCache: (revision: Int, timelineId: String, index: [String: ClipLocation])?
+    @ObservationIgnored var keyframeNavigationCache: [
+        KeyframeNavigationCacheKey: [KeyframeLaneNavigationTarget]
+    ] = [:]
+    @ObservationIgnored var keyframeNavigationCacheTimelineId: String?
+    @ObservationIgnored var keyframeNavigationCacheRevision = -1
     /// Live horizontal scroll of the timeline panel, mirrored from AppKit for view-state stash.
     @ObservationIgnored var timelineScrollOffsetX: Double = 0
     var timelineScrollRestoreX: Double?
@@ -120,17 +170,27 @@ final class EditorViewModel {
     var toolMode: ToolMode = .pointer
     var showExportDialog: Bool = false
     var showGenerationPanel: Bool = false {
-        didSet { if showGenerationPanel && !oldValue { showMediaPanelMediaTab() } }
+        didSet {
+            if showGenerationPanel && !oldValue { showMediaPanelMediaTab() } else if !showGenerationPanel && oldValue { clearPendingGenerationPanelState() }
+        }
     }
     /// AIEditTab input consumed by GenerationView.
     var pendingPanelSeed: PendingPanelSeed?
     var pendingEditReplacementClipId: String?
     var pendingEditTrimmedSource: TrimmedSource?
     var pendingEditAudioPlacement: PendingAudioPlacement?
+    var pendingEditTransitionPlacement: PendingTransitionPlacement?
     /// Clip ids currently awaiting an AI-generated replacement.
     var pendingReplacements: Set<String> = []
+    var agentActivity = AgentActivityHighlight()
+    @ObservationIgnored var agentActivityClearTask: Task<Void, Never>?
     var cropEditingActive: Bool = false
     var chromaKeySamplingClipId: String?
+    /// Two-up in/out frames shown in the viewer while a slip drag is active.
+    var slipPreview: SlipPreviewState?
+    var captionPreviewConfiguration: CaptionPreviewConfiguration?
+    var captionPreviewEnabled = true
+    @ObservationIgnored var captionPreviewCenterChange: ((CGPoint) -> Void)?
     var cropAspectLock: CropAspectLock = .free
     var previewTabs: [PreviewTab] = [.timeline]
     var activePreviewTabId: String = PreviewTab.timeline.id
@@ -138,15 +198,6 @@ final class EditorViewModel {
     var previewTabHistoryIndex: Int = 0
     var sourcePlayheadFrame: Int = 0 {
         didSet { playheadState.sourceFrame = sourcePlayheadFrame }
-    }
-    var layoutPreset: LayoutPreset = {
-        if let raw = UserDefaults.standard.string(forKey: "layoutPreset"),
-           let preset = LayoutPreset(rawValue: raw) {
-            return preset
-        }
-        return .default
-    }() {
-        didSet { UserDefaults.standard.set(layoutPreset.rawValue, forKey: "layoutPreset") }
     }
     // MARK: - Media library (in-memory, rebuilt on project open)
 
@@ -162,6 +213,7 @@ final class EditorViewModel {
     var missingMediaRefs: Set<String> = []
     @ObservationIgnored var missingMediaRefreshTask: Task<Void, Never>?
     let mediaVisualCache = MediaVisualCache()
+    let deadAirMaskCache = DeadAirMaskCache()
     let searchIndex = SearchIndexCoordinator()
     var projectURL: URL? {
         didSet {
@@ -200,17 +252,23 @@ final class EditorViewModel {
         didSet { UserDefaults.standard.set(inspectorPanelVisible, forKey: "inspectorPanelVisible") }
     }
 
-    var keyframesPanelVisible: Bool = {
-        UserDefaults.standard.object(forKey: "keyframesPanelVisible") as? Bool ?? false
-    }() {
-        didSet { UserDefaults.standard.set(keyframesPanelVisible, forKey: "keyframesPanelVisible") }
-    }
-
     var markDeadAir: Bool = {
         UserDefaults.standard.object(forKey: "markDeadAir") as? Bool ?? true
     }() {
         didSet {
             UserDefaults.standard.set(markDeadAir, forKey: "markDeadAir")
+            mediaVisualCache.timelineView?.needsDisplay = true
+        }
+    }
+
+    var rippleTimelineMarkers: Bool = {
+        UserDefaults.standard.object(forKey: "rippleTimelineMarkers") as? Bool ?? true
+    }() {
+        didSet { UserDefaults.standard.set(rippleTimelineMarkers, forKey: "rippleTimelineMarkers") }
+    }
+
+    var silenceRemovalSettings = SilenceRemovalSettings.default {
+        didSet {
             mediaVisualCache.timelineView?.needsDisplay = true
         }
     }
@@ -236,22 +294,43 @@ final class EditorViewModel {
     // MARK: - Media panel navigation routing
 
     var mediaPanelOrderedItemIds: [String] = []
+    @ObservationIgnored var mediaPanelSelectionAnchor: String?
     var mediaPanelColumnCount: Int = 1
     var mediaPanelScrollTarget: String?
     var mediaPanelRevealAssetId: String?
     var mediaPanelOpenFolderId: String?
     var mediaPanelCurrentFolderId: String?
+    var mediaPanelNavigateUpRequestTick: Int = 0
+    var mediaPanelNewFolderRequestTick: Int = 0
     var mediaPanelPasteRequestTick: Int = 0
     var mediaPanelShowMediaTabTick: Int = 0
+    var mediaPanelSearchFocusTick: Int = 0
+    var mediaPanelSearchFocusPending = false
+    var isMediaPanelSearchExpanded = false
     var mediaPanelToast: MediaPanelToast?
-    @ObservationIgnored var mediaImportTail: Task<MediaImportSummary, Never>?
+    @ObservationIgnored var mediaImportTail: Task<MediaImportSummary, Error>?
     @ObservationIgnored var mediaImportSequence: Int = 0
+    @ObservationIgnored var frameCaptureTask: Task<Void, Never>?
+    @ObservationIgnored var transitionSeedTask: Task<Void, Never>?
+    @ObservationIgnored var pendingManifestMetadataUpdates: [String: MediaAsset] = [:]
+    @ObservationIgnored var pendingManifestMetadataFlushTask: Task<Void, Never>?
 
     func showMediaPanelMediaTab() {
         mediaPanelShowMediaTabTick += 1
         // Refresh offline status when the user opens the media tab, so missing
         // files show as offline even for assets not on the timeline.
         refreshMissingMediaCache()
+    }
+
+    func requestMediaPanelSearch() {
+        isMediaPanelSearchExpanded = true
+        mediaPanelSearchFocusPending = true
+        mediaPanelSearchFocusTick &+= 1
+    }
+
+    func collapseMediaPanelSearch() {
+        isMediaPanelSearchExpanded = false
+        mediaPanelSearchFocusPending = false
     }
 
     init() {
@@ -268,6 +347,12 @@ final class EditorViewModel {
         mediaVisualCache.speech.onAnalyzingCountChange = { [weak self] count in
             self?.speechAnalyzingCount = count
         }
+        mediaVisualCache.onDeadAirCacheInvalidated = { [weak self] in
+            self?.deadAirMaskCache.reset()
+        }
+        undo.onActionCommitted = { [weak self] in
+            self?.captureCommittedEdit()
+        }
 
         // Re-check media presence when the app regains focus: a user may have
         // deleted/moved backing files in Finder (or ejected a volume) while we
@@ -277,6 +362,12 @@ final class EditorViewModel {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshMissingMediaCache() }
         }
+    }
+
+    private func captureCommittedEdit() {
+        var payload = Analytics.originProperties()
+        payload["project_id"] = projectId ?? "unknown"
+        Analytics.capture(.editorEditCommitted, properties: payload)
     }
 
     @ObservationIgnored private nonisolated(unsafe) var didBecomeActiveObserver: NSObjectProtocol?
@@ -289,8 +380,11 @@ final class EditorViewModel {
 
     // MARK: - Document bridge
 
-    weak var undoManager: UndoManager?
+    @ObservationIgnored let undo = EditorUndo()
+    @ObservationIgnored let projectPackageCoordinator = ProjectPackageCoordinator()
     @ObservationIgnored var onProjectCheckpointRequired: (() -> Void)?
+    @ObservationIgnored var onCancelTimelineDrag: (() -> Void)?
+    @ObservationIgnored var onPresentTimelineMarkerEditor: ((String) -> Void)?
     var isDocumentEdited: Bool = false
 
     func telemetrySnapshot() -> [String: Any] {
@@ -309,7 +403,6 @@ final class EditorViewModel {
             "mediaByType": mediaCounts,
             "offlineMedia": offlineMediaRefs.count,
             "unprocessableMedia": unprocessableMediaRefs.count,
-            "generationLogEntries": generationLog.entries.count,
             "agentSessions": agentService.sessions.count
         ]
     }
@@ -344,6 +437,12 @@ final class EditorViewModel {
     var pendingSettingsContinuation: (@MainActor () -> Void)?
 
     // MARK: - Playback
+
+    func setPlaybackRate(_ rate: PreviewPlaybackRate) {
+        guard playbackRate != rate else { return }
+        playbackRate = rate
+        videoEngine?.setPlaybackRate(rate)
+    }
 
     func togglePlayback() {
         if let videoEngine {
@@ -423,7 +522,8 @@ final class EditorViewModel {
     var pendingRebuildTask: Task<Void, Never>?
 
     func notifyTimelineChanged(refreshVisuals: Bool = true) {
-        guard undoManager?.isUndoRegistrationEnabled ?? true else { return }
+        selectedTimelineMarkerIds.formIntersection(timeline.markers.map(\.id))
+        guard undo.isRegistrationEnabled else { return }
         enhancePendingDenoises()
         pendingRebuildTask?.cancel()
         pendingRebuildTask = nil
@@ -433,7 +533,7 @@ final class EditorViewModel {
         if refreshVisuals {
             videoEngine?.refreshVisuals()
         }
-        videoEngine?.rebuild()
+        videoEngine?.rebuild(visualsCurrent: refreshVisuals)
     }
 
     /// Coalesce rapid rebuilds. An immediate `notifyTimelineChanged` cancels any pending debounced one.
@@ -462,6 +562,7 @@ final class EditorViewModel {
         trimEndFrame: Int? = nil
     ) -> [String] {
         guard timeline.tracks.indices.contains(trackIndex) else { return [] }
+        prepareMediaVisuals(for: asset)
         let targetIsVideo = timeline.tracks[trackIndex].type == .video
         let shouldLink = addLinkedAudio && targetIsVideo && asset.hasAudio
             && (asset.type == .video || asset.type == .sequence)
@@ -546,12 +647,26 @@ final class EditorViewModel {
     }
 
     func findClip(id: String) -> ClipLocation? {
-        for ti in timeline.tracks.indices {
-            if let ci = timeline.tracks[ti].clips.firstIndex(where: { $0.id == id }) {
-                return ClipLocation(trackIndex: ti, clipIndex: ci)
+        clipLocationIndex[id]
+    }
+
+    private var clipLocationIndex: [String: ClipLocation] {
+        let current = timeline
+        if let cache = clipLocationIndexCache,
+           cache.revision == timelineRenderRevision, cache.timelineId == current.id {
+            return cache.index
+        }
+        var index: [String: ClipLocation] = [:]
+        for ti in current.tracks.indices {
+            for ci in current.tracks[ti].clips.indices {
+                let id = current.tracks[ti].clips[ci].id
+                if index[id] == nil {
+                    index[id] = ClipLocation(trackIndex: ti, clipIndex: ci)
+                }
             }
         }
-        return nil
+        clipLocationIndexCache = (timelineRenderRevision, current.id, index)
+        return index
     }
 
     func clipFor(id: String) -> Clip? {
@@ -642,6 +757,18 @@ final class EditorViewModel {
             let top = total * ay
             return Crop(left: 0, top: top, right: 0, bottom: total - top)
         }
+    }
+
+    func displayedCropAspectRatio(for clip: Clip, preferLockedRatio: Bool = true) -> CropAspectRatio? {
+        if preferLockedRatio, let ratio = cropAspectLock.aspectRatio { return ratio }
+        guard let dimensions = sourceDimensions(for: clip) else { return nil }
+        let crop = clip.cropAt(frame: activeFrame)
+        if crop.isIdentity {
+            return CropAspectRatio(pixelWidth: dimensions.width, pixelHeight: dimensions.height)
+        }
+        guard crop.visibleWidthFraction > 0, crop.visibleHeightFraction > 0 else { return nil }
+        let sourceAspect = Double(dimensions.width) / Double(dimensions.height)
+        return CropAspectRatio(pixelAspect: sourceAspect * crop.visibleWidthFraction / crop.visibleHeightFraction)
     }
 
     func removeClipInternal(id: String) {
