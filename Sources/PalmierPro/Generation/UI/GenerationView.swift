@@ -10,6 +10,7 @@ struct GenerationView: View {
     @State var selectedVideoModelIndex = 0
     @State var selectedImageModelIndex = 0
     @State var selectedAudioModelIndex = 0
+    @State var selectedUpscaleModelIndex = 0
     @State var selectedDuration = 5
     @State var selectedAspectRatio = "16:9"
     @State var selectedResolution = "1080p"
@@ -23,7 +24,10 @@ struct GenerationView: View {
     @State var instrumental = false
     @State var selectedAudioDuration = 30
     @State var selectedTargetLanguage = ""
+    @State var multilingual = false
     @State var generateAudio = true
+    @State var videoDraft = false
+    @State var upscaleSettings = UpscaleSettings()
     @State var showSettingsPopover = false
     @FocusState private var isPromptFocused: Bool
 
@@ -43,8 +47,7 @@ struct GenerationView: View {
     @State var refAudios: [MediaAsset] = []
     @State var refsTargeted = false
 
-    /// See frames/references mode for `framesAndReferencesExclusive` models.
-    @State var framesRefsMode: FramesRefsMode = .firstLast
+    @State var videoInputMode: VideoInputMode = .frames
 
     // Source video (for video-to-video edit models)
     @State var sourceVideo: MediaAsset?
@@ -54,6 +57,10 @@ struct GenerationView: View {
     // Source media for audio transformations and video-to-audio models
     @State var audioSource: MediaAsset?
     @State var audioSourceTargeted = false
+
+    // Source media for enhancement models
+    @State var upscaleSource: MediaAsset?
+    @State var upscaleSourceTargeted = false
 
     @State var isPopulatingPanel = false
     @State var editFolderId: String?
@@ -93,14 +100,23 @@ struct GenerationView: View {
         return AppTheme.GenerationPanel.promptMinHeight + CGFloat(extra)
     }
 
-    enum FramesRefsMode: String, CaseIterable {
-        case firstLast = "First/Last"
-        case reference = "Reference"
+    enum VideoInputMode: String, CaseIterable {
+        case frames = "First/Last"
+        case references = "References"
+        case sourceVideo = "Extend"
+
+        var title: String {
+            switch self {
+            case .frames: L10n.key("First/Last")
+            case .references: L10n.key("References")
+            case .sourceVideo: L10n.key("Extend")
+            }
+        }
     }
 
     struct RefTag: Hashable, Identifiable {
         let label: String
-        let kindLabel: String
+        let kind: ClipType
         var id: String { label }
     }
 
@@ -108,11 +124,21 @@ struct GenerationView: View {
         case image = "Image"
         case video = "Video"
         case audio = "Audio"
+        case upscale = "Upscale"
+        var title: String {
+            switch self {
+            case .image: L10n.key("Image")
+            case .video: L10n.key("Video")
+            case .audio: L10n.key("Audio")
+            case .upscale: L10n.key("Upscale")
+            }
+        }
         var icon: String {
             switch self {
             case .image: "photo"
             case .video: "video"
             case .audio: "waveform"
+            case .upscale: "arrow.up.right.square"
             }
         }
         var accentColor: Color {
@@ -123,6 +149,7 @@ struct GenerationView: View {
             case .image: .image
             case .video: .video
             case .audio: .audio
+            case .upscale: .video
             }
         }
     }
@@ -137,6 +164,7 @@ struct GenerationView: View {
                 catalogLoadingView
             }
         }
+        .frame(maxHeight: max(0, CGFloat(maxPanelHeight)), alignment: .top)
         .onAppear { normalizeTypeSelection() }
         .onChange(of: availableTypes) { _, _ in normalizeTypeSelection() }
     }
@@ -144,26 +172,17 @@ struct GenerationView: View {
     private var catalogLoadingView: some View {
         VStack(spacing: AppTheme.Spacing.md) {
             ProgressView()
-            Text("Loading models…")
+            Text(L10n.string("Loading models…"))
                 .font(.system(size: AppTheme.FontSize.sm))
                 .foregroundStyle(AppTheme.Text.secondaryColor)
         }
         .frame(maxWidth: .infinity)
         .frame(height: AppTheme.GenerationPanel.loadingHeight)
-        .background {
-            RoundedRectangle(cornerRadius: AppTheme.Radius.lg)
-                .fill(AppTheme.aiGradientDark)
-                .allowsHitTesting(false)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.lg))
-        .shadow(AppTheme.Shadow.sm)
-        .padding(.horizontal, AppTheme.Spacing.sm)
-        .padding(.bottom, AppTheme.Spacing.sm)
+        .background { panelChrome }
     }
 
     private var bodyContent: some View {
         VStack(alignment: .leading, spacing: AppTheme.Spacing.sm) {
-            resizeHandle
             // Type tabs (left) · credits · activity · close (right)
             HStack(spacing: AppTheme.Spacing.sm) {
                 typeTabs
@@ -171,10 +190,6 @@ struct GenerationView: View {
                 CreditSummaryView(style: .compact)
                 ProjectActivityButton()
                 Button {
-                    editor.pendingEditReplacementClipId = nil
-                    editor.pendingEditTrimmedSource = nil
-                    editor.pendingEditAudioPlacement = nil
-                    editor.pendingPanelSeed = nil
                     editFolderId = nil
                     editor.showGenerationPanel = false
                 } label: {
@@ -186,15 +201,9 @@ struct GenerationView: View {
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.horizontal, AppTheme.Spacing.sm)
+            .padding(.horizontal, AppTheme.Spacing.md)
 
-            if showsFramesRefsPicker {
-                framesRefsModePicker
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, AppTheme.Spacing.sm)
-            }
-
-            VStack(spacing: AppTheme.Spacing.xs) {
+            VStack(spacing: AppTheme.Spacing.sm) {
                 referencesContent
                     .layoutPriority(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -208,11 +217,11 @@ struct GenerationView: View {
                 }
 
                 VStack(spacing: 0) {
-                    promptArea
+                    if showsPrompt { promptArea }
                     if selectedType == .audio && audioModel.supportsLyrics {
                         inputDivider
                         secondaryField(
-                            placeholder: "Lyrics (optional). [Verse] and [Chorus] tags supported.",
+                            placeholder: L10n.string("Lyrics (optional). [Verse] and [Chorus] tags supported."),
                             text: $lyrics,
                             minHeight: 60, maxHeight: 120
                         )
@@ -220,7 +229,7 @@ struct GenerationView: View {
                     if selectedType == .audio && audioModel.supportsStyleInstructions {
                         inputDivider
                         secondaryField(
-                            placeholder: "Style instructions (optional). e.g., warm and slow, British accent.",
+                            placeholder: L10n.string("Style instructions (optional). e.g., warm and slow, British accent."),
                             text: $styleInstructions,
                             minHeight: 36, maxHeight: 72
                         )
@@ -228,40 +237,29 @@ struct GenerationView: View {
                     inputToolbar
                 }
                 .background {
-                    let r = AppTheme.Radius.concentric(outer: AppTheme.Radius.lg, padding: AppTheme.Spacing.sm)
-                    RoundedRectangle(cornerRadius: r)
-                        .fill(Color.black.opacity(AppTheme.Opacity.subtle))
+                    RoundedRectangle(cornerRadius: AppTheme.Radius.lg, style: .continuous)
+                        .fill(AppTheme.Background.prominentColor)
                 }
+                .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.lg, style: .continuous))
                 .overlay {
-                    let r = AppTheme.Radius.concentric(outer: AppTheme.Radius.lg, padding: AppTheme.Spacing.sm)
-                    RoundedRectangle(cornerRadius: r)
+                    RoundedRectangle(cornerRadius: AppTheme.Radius.lg, style: .continuous)
                         .strokeBorder(
-                            isPromptFocused ? AppTheme.Accent.primary.opacity(AppTheme.Opacity.strong) : Color.white.opacity(AppTheme.Opacity.faint),
+                            isPromptFocused
+                                ? AppTheme.Accent.primary.opacity(AppTheme.Opacity.medium)
+                                : Color.clear,
                             lineWidth: AppTheme.BorderWidth.thin
                         )
+                        .allowsHitTesting(false)
                 }
-                .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.concentric(outer: AppTheme.Radius.lg, padding: AppTheme.Spacing.sm)))
+                .animation(.easeOut(duration: AppTheme.Anim.hover), value: isPromptFocused)
             }
-            .padding(.horizontal, AppTheme.Spacing.sm)
-            .padding(.bottom, AppTheme.Spacing.sm)
+            .padding(.horizontal, AppTheme.Spacing.md)
+            .padding(.bottom, AppTheme.Spacing.md)
         }
-        .padding(.top, AppTheme.Spacing.xxs)
+        .padding(.top, AppTheme.Spacing.md)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { measuredPanelHeight = $0 }
-        .background {
-            RoundedRectangle(cornerRadius: AppTheme.Radius.lg)
-                .fill(AppTheme.aiGradientDark)
-                .allowsHitTesting(false)
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: AppTheme.Radius.lg)
-                .strokeBorder(AppTheme.aiGradientDark, lineWidth: AppTheme.BorderWidth.medium)
-                .allowsHitTesting(false)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.lg))
-        .shadow(AppTheme.Shadow.sm)
-        .padding(.horizontal, AppTheme.Spacing.sm)
-        .padding(.bottom, AppTheme.Spacing.sm)
-        .frame(maxHeight: max(0, CGFloat(maxPanelHeight)), alignment: .top)
+        .background { panelChrome }
+        .overlay(alignment: .top) { resizeHandle }
         .onAppear {
             let hadSeed = editor.pendingPanelSeed != nil
             consumePendingPanelSeed()
@@ -284,17 +282,16 @@ struct GenerationView: View {
             clearReferences()
             if newValue == .audio { resetAudioState() }
             editFolderId = nil
-            editor.pendingEditTrimmedSource = nil
-            editor.pendingEditAudioPlacement = nil
+            editor.clearPendingGenerationPanelState(preservingReplacement: true)
         }
         .onChange(of: selectedVideoModelIndex) { _, _ in
             guard !isPopulatingPanel else { return }
             if selectedType == .video {
                 resetSettings()
+                videoInputMode = .frames
                 if !videoModel.requiresSourceVideo {
                     sourceVideo = nil
                 }
-                framesRefsMode = .firstLast
                 resetRefPools()
             }
         }
@@ -306,35 +303,63 @@ struct GenerationView: View {
         }
         .onChange(of: selectedAudioModelIndex) { _, _ in
             guard !isPopulatingPanel else { return }
-            if selectedType == .audio { resetAudioState() }
+            if selectedType == .audio {
+                resetRefPools()
+                resetAudioState()
+            }
+        }
+        .onChange(of: selectedUpscaleModelIndex) { _, _ in
+            guard !isPopulatingPanel else { return }
+            if selectedType == .upscale { resetUpscaleSettings() }
+        }
+        .onChange(of: upscaleSource?.id) { _, _ in
+            guard selectedType == .upscale, !isPopulatingPanel else { return }
+            normalizeModelSelection()
+            resetUpscaleSettings()
         }
     }
 
     @ViewBuilder
     private var referencesContent: some View {
-        if selectedType == .video && videoModel.requiresSourceVideo {
+        if selectedType == .upscale {
+            upscaleSourceStrip
+        } else if selectedType == .video && usesSourceVideoInput {
             editVideoStrip
         } else if selectedType == .video {
             VStack(alignment: .leading, spacing: AppTheme.Spacing.sm) {
                 if showsFrameStrip { videoFrameStrip }
-                if showsRefSections { videoReferenceSections }
+                if showsRefSections { referenceSections }
             }
         } else if selectedType == .image && imageModel.supportsImageReference {
             imageReferenceStrip
-        } else if selectedType == .audio && audioModel.acceptsSourceMedia {
+        } else if selectedType == .audio && audioUsesSource {
             audioSourceStrip
+        } else if selectedType == .audio && showsRefSections {
+            referenceSections
         }
+    }
+
+    private var panelChrome: some View {
+        AppTheme.Background.surfaceColor
+            .shadow(AppTheme.Shadow.overlay)
+            .shadow(AppTheme.Shadow.lg)
+            .overlay(alignment: .top) {
+                Rectangle()
+                    .fill(AppTheme.Border.primaryColor)
+                    .frame(height: AppTheme.BorderWidth.thin)
+            }
+            .allowsHitTesting(false)
     }
 
     // MARK: - Resize handle
 
     private var resizeHandle: some View {
-        Capsule()
-            .fill(Color.white.opacity(AppTheme.Opacity.soft))
-            .frame(width: 24, height: 2)
-            .frame(maxWidth: .infinity, minHeight: AppTheme.Spacing.md)
+        Color.clear
+            .frame(maxWidth: .infinity)
+            .frame(height: AppTheme.Spacing.md)
             .contentShape(Rectangle())
             .pointerStyle(.rowResize)
+            .offset(y: -AppTheme.Spacing.md / 2)
             .gesture(
                 DragGesture(minimumDistance: 0, coordinateSpace: .global)
                     .onChanged { value in
@@ -371,7 +396,6 @@ struct GenerationView: View {
                 ), attachmentAnchor: .point(.topLeading), arrowEdge: .top) {
                     refMentionPopover
                 }
-                .disabled(!isPromptEnabled)
 
             if prompt.isEmpty {
                 Text(promptPlaceholder)
@@ -383,15 +407,13 @@ struct GenerationView: View {
             }
         }
         .frame(height: promptHeight)
-        .opacity(isPromptEnabled ? AppTheme.Opacity.opaque : AppTheme.Opacity.muted)
-        .accessibilityHint(isPromptEnabled ? "" : "This model does not use a prompt")
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { measuredPromptHeight = $0 }
     }
 
     // MARK: - Secondary fields (lyrics / style instructions)
 
     private var inputDivider: some View {
-        Rectangle().fill(Color.white.opacity(AppTheme.Opacity.hint)).frame(height: AppTheme.BorderWidth.hairline)
+        Rectangle().fill(AppTheme.Interaction.fill(AppTheme.Opacity.hint)).frame(height: AppTheme.BorderWidth.hairline)
     }
 
     private func secondaryField(
@@ -423,26 +445,25 @@ struct GenerationView: View {
     // MARK: - Input toolbar (bottom of input box)
 
     private var inputToolbar: some View {
-        VStack(spacing: 0) {
-            inputDivider
-            HStack(spacing: AppTheme.Spacing.sm) {
-                modelPicker
-                if selectedType == .audio, audioModel.voices != nil {
-                    voicePicker
-                }
-                if selectedType == .audio, audioModel.targetLanguages != nil {
-                    languagePicker
-                }
-                if hasAnySettings { settingsButton }
-
-                Spacer(minLength: AppTheme.Spacing.xs)
-
-                costEstimateLabel
-                submitButton
+        HStack(spacing: AppTheme.Spacing.sm) {
+            modelPicker
+            if showsVideoInputModePicker { videoInputModePicker }
+            if selectedType == .audio, audioModel.voices != nil {
+                voicePicker
             }
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, AppTheme.Spacing.md)
-            .padding(.vertical, AppTheme.Spacing.sm)
+            if selectedType == .audio, audioModel.targetLanguages != nil {
+                languagePicker
+            }
+            if supportsDraftToggle { draftToggleButton }
+            if hasAnySettings { settingsButton }
+
+            Spacer(minLength: AppTheme.Spacing.xs)
+
+            costEstimateLabel
+            submitButton
         }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, AppTheme.Spacing.md)
+        .padding(.vertical, AppTheme.Spacing.sm)
     }
 }

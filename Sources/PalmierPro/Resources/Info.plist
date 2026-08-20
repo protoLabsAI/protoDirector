@@ -29,22 +29,12 @@
 	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>studio.protolabs.director</string>
-	<key>CFBundleLocalizations</key>
-	<array>
-		<string>en</string>
-		<string>es</string>
-		<string>fr</string>
-		<string>de</string>
-		<string>ja</string>
-		<string>pt-BR</string>
-		<string>zh-Hans</string>
-	</array>
 	<key>CFBundleName</key>
 	<string>protoDirector</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.6.5</string>
+	<string>0.7.6</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -57,7 +47,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>66</string>
+	<string>84</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>26.0</string>
 	<key>NSHighResolutionCapable</key>

@@ -4,20 +4,39 @@ set -euo pipefail
 # Usage:
 #   scripts/bundle.sh [release|debug]           # ad-hoc signed dev build
 #   scripts/bundle.sh debug --fast              # fastest: skip dSYM + deep sign, just env+build
+#   scripts/bundle.sh debug --speech             # include bundled speech and MLX
+#   scripts/bundle.sh debug --telemetry          # include production telemetry
+#   scripts/bundle.sh debug --all                # include all optional traits
 #   scripts/bundle.sh release --sign            # build + Developer ID codesign
 #   scripts/bundle.sh release --dist            # build + sign + notarize + staple + DMG
 
 CONFIG="release"
 MODE="dev"
+ENABLE_ALL_TRAITS=false
+INCLUDE_BUNDLED_SPEECH=false
+INCLUDE_PRODUCTION_TELEMETRY=false
 for arg in "$@"; do
   case "$arg" in
     release|debug) CONFIG="$arg" ;;
     --fast)        MODE="fast" ;;
     --sign)        MODE="sign" ;;
     --dist)        MODE="dist" ;;
+    --speech)      INCLUDE_BUNDLED_SPEECH=true ;;
+    --telemetry)   INCLUDE_PRODUCTION_TELEMETRY=true ;;
+    --all)
+      ENABLE_ALL_TRAITS=true
+      INCLUDE_BUNDLED_SPEECH=true
+      INCLUDE_PRODUCTION_TELEMETRY=true
+      ;;
     *) echo "unknown arg: $arg" >&2; exit 1 ;;
   esac
 done
+
+if [ "$CONFIG" = "release" ]; then
+  ENABLE_ALL_TRAITS=true
+  INCLUDE_BUNDLED_SPEECH=true
+  INCLUDE_PRODUCTION_TELEMETRY=true
+fi
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -77,9 +96,30 @@ PLIST
   KEYCHAIN_ACCESS_GROUP="${KEYCHAIN_ACCESS_GROUP:-$TEAM_ID.$BUNDLE_ID}"
 fi
 
-echo "==> Building ($CONFIG)"
-swift build -c "$CONFIG"
-BIN="$(swift build -c "$CONFIG" --show-bin-path)/PalmierPro"
+BUILD_ARGS=(-c "$CONFIG")
+if $ENABLE_ALL_TRAITS; then
+  TRAITS="all"
+  BUILD_ARGS+=(--enable-all-traits)
+else
+  TRAITS=""
+  if $INCLUDE_BUNDLED_SPEECH; then
+    TRAITS="BundledSpeech"
+  fi
+  if $INCLUDE_PRODUCTION_TELEMETRY; then
+    if [ -n "$TRAITS" ]; then
+      TRAITS="$TRAITS,ProductionTelemetry"
+    else
+      TRAITS="ProductionTelemetry"
+    fi
+  fi
+  if [ -n "$TRAITS" ]; then
+    BUILD_ARGS+=(--traits "$TRAITS")
+  fi
+fi
+
+echo "==> Building ($CONFIG, traits: ${TRAITS:-none})"
+swift build "${BUILD_ARGS[@]}"
+BIN="$(swift build "${BUILD_ARGS[@]}" --show-bin-path)/PalmierPro"
 SPARKLE_FW="$ROOT/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
 
 echo "==> Assembling $APP"
@@ -131,23 +171,37 @@ else
   echo "!! missing Fonts/ in SwiftPM resource bundle at $RES_BUNDLE" >&2
   exit 1
 fi
-if [ -f "$RES_BUNDLE/proto-director.mcpb" ]; then
-  cp "$RES_BUNDLE/proto-director.mcpb" "$APP/Contents/Resources/"
-else
-  echo "!! missing proto-director.mcpb in SwiftPM resource bundle at $RES_BUNDLE" >&2
-  exit 1
+
+# Ensure the shipped Claude Desktop connector is always up to date with mcpb/ sources.
+MCPB_SRC="$ROOT/mcpb"
+MCPB_CHECKED_IN="$ROOT/Sources/PalmierPro/Resources/MCPB/proto-director.mcpb"
+MCPB_FRESH="$(mktemp -d)/proto-director.mcpb"
+(cd "$MCPB_SRC" && zip -q -X -r "$MCPB_FRESH" manifest.json icon.png server/index.js server/package.json)
+if ! unzip -p "$MCPB_CHECKED_IN" server/index.js 2>/dev/null | diff -q - <(unzip -p "$MCPB_FRESH" server/index.js) >/dev/null 2>&1 \
+  || ! unzip -p "$MCPB_CHECKED_IN" manifest.json 2>/dev/null | diff -q - <(unzip -p "$MCPB_FRESH" manifest.json) >/dev/null 2>&1; then
+  echo "==> refreshing checked-in proto-director.mcpb from mcpb/ sources"
+  cp "$MCPB_FRESH" "$MCPB_CHECKED_IN"
 fi
+cp "$MCPB_FRESH" "$APP/Contents/Resources/proto-director.mcpb"
+rm -rf "$(dirname "$MCPB_FRESH")"
 if [ -d "$RES_BUNDLE/Images" ]; then
   cp -R "$RES_BUNDLE/Images" "$APP/Contents/Resources/"
 fi
-# .lproj folders must live at the bundle root for macOS to resolve them —
-# flatten out of Resources/Localization/ even though that's just an org folder.
-if [ -d "$RES_BUNDLE/Localization" ]; then
-  for locale_dir in "$RES_BUNDLE/Localization"/*.lproj; do
-    [ -d "$locale_dir" ] && cp -R "$locale_dir" "$APP/Contents/Resources/"
+# .lproj folders must live at the bundle root for macOS to resolve them.
+LOCALIZATION_COUNT=0
+for locale_dir in "$RES_BUNDLE"/*.lproj; do
+  [ -d "$locale_dir" ] || continue
+  for strings_file in Localizable.strings InfoPlist.strings; do
+    if [ ! -f "$locale_dir/$strings_file" ]; then
+      echo "!! missing $strings_file in $locale_dir" >&2
+      exit 1
+    fi
   done
-else
-  echo "!! missing Localization/ in SwiftPM resource bundle at $RES_BUNDLE" >&2
+  cp -R "$locale_dir" "$APP/Contents/Resources/"
+  LOCALIZATION_COUNT=$((LOCALIZATION_COUNT + 1))
+done
+if [ "$LOCALIZATION_COUNT" -eq 0 ]; then
+  echo "!! no compiled localizations in SwiftPM resource bundle at $RES_BUNDLE" >&2
   exit 1
 fi
 if [ -d "$RES_BUNDLE/Changelog" ]; then
@@ -169,17 +223,19 @@ if ! ls "$RES_BUNDLE"/*.metallib >/dev/null 2>&1; then
 fi
 cp "$RES_BUNDLE"/*.metallib "$APP/Contents/Resources/"
 
-MLX_METALLIB="$ROOT/.build/$CONFIG/mlx.metallib"
-if [ ! -f "$MLX_METALLIB" ]; then
-  echo "==> Building MLX metallib ($CONFIG)"
-  BUILD_DIR="$ROOT/.build" "$ROOT/.build/checkouts/speech-swift/scripts/build_mlx_metallib.sh" "$CONFIG"
+if $INCLUDE_BUNDLED_SPEECH; then
+  MLX_METALLIB="$ROOT/.build/$CONFIG/mlx.metallib"
+  if [ ! -f "$MLX_METALLIB" ]; then
+    echo "==> Building MLX metallib ($CONFIG)"
+    BUILD_DIR="$ROOT/.build" "$ROOT/.build/checkouts/speech-swift/scripts/build_mlx_metallib.sh" "$CONFIG"
+  fi
+  if [ ! -f "$MLX_METALLIB" ]; then
+    echo "!! missing $MLX_METALLIB — on-device speech features (VAD, speaker ID) would die silently" >&2
+    exit 1
+  fi
+  mkdir -p "$APP/Contents/Resources/mlx-swift_Cmlx.bundle"
+  cp "$MLX_METALLIB" "$APP/Contents/Resources/mlx-swift_Cmlx.bundle/default.metallib"
 fi
-if [ ! -f "$MLX_METALLIB" ]; then
-  echo "!! missing $MLX_METALLIB — on-device speech features (VAD, speaker ID) would die silently" >&2
-  exit 1
-fi
-mkdir -p "$APP/Contents/Resources/mlx-swift_Cmlx.bundle"
-cp "$MLX_METALLIB" "$APP/Contents/Resources/mlx-swift_Cmlx.bundle/default.metallib"
 
 install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP/Contents/MacOS/protoDirector"
 touch "$APP"
@@ -187,7 +243,8 @@ touch "$APP"
 if [ "$MODE" = "fast" ]; then
   echo "==> Codesigning main app with $SIGNING_IDENTITY (no timestamp, no helpers)"
   codesign --force --sign "$SIGNING_IDENTITY" "$APP"
-  echo "==> Done: $APP (fast mode — stable identity, no dSYM, no nested re-sign)"
+  codesign --verify --deep --strict --verbose=2 "$APP"
+  echo "==> Done: $APP (fast mode — stable identity, no dSYM)"
   exit 0
 fi
 

@@ -48,6 +48,25 @@ struct MulticamTests {
         h.editor.multicamClips(of: groupId).first { $0.clip.mediaType == .audio }!.clip
     }
 
+    private func rippleSeam(
+        _ h: ToolHarness, groupId: String
+    ) throws -> (leftProgram: Clip, rightProgram: Clip, leftMic: Clip, rightMic: Clip) {
+        guard case .ok = h.editor.rippleDeleteRangesOnTrack(
+            trackIndex: 0, ranges: [FrameRange(start: 600, end: 700)]
+        ) else {
+            Issue.record("ripple refused")
+            throw CancellationError()
+        }
+        let program = programClips(h, groupId)
+        let mic = h.editor.multicamClips(of: groupId).map(\.clip).filter { $0.mediaType == .audio }
+        return (
+            try #require(program.first { $0.endFrame == 600 }),
+            try #require(program.first { $0.startFrame == 600 }),
+            try #require(mic.first { $0.endFrame == 600 }),
+            try #require(mic.first { $0.startFrame == 600 })
+        )
+    }
+
     // MARK: - Model
 
     @Test func groupMetadataRoundTripsThroughProjectFile() throws {
@@ -83,6 +102,136 @@ struct MulticamTests {
         clip.freshenIds(groups: &groups)
         #expect(clip.multicamGroupId == "g1")
         #expect(clip.linkGroupId != "L1")
+    }
+
+    @Test func silenceMaskRequiresEveryMicToBeSilent() {
+        let settings = SilenceRemovalSettings(
+            minimumPauseSeconds: 0.25,
+            speechPaddingSeconds: 0
+        )!
+        var group = MulticamSource(name: "Podcast", members: [
+            .init(mediaRef: "host", kind: .mic, angleLabel: "host",
+                  sync: .init(offsetSeconds: VoiceActivity.chunkDuration, confidence: 1)),
+            .init(mediaRef: "guest", kind: .mic, angleLabel: "guest",
+                  sync: .init(offsetSeconds: 0, confidence: 1)),
+        ])
+        group.masterMemberId = group.members[0].id
+
+        var clip = Fixtures.clip(
+            mediaRef: "host", mediaType: .audio, start: 0, duration: 10
+        )
+        clip.multicamGroupId = group.id
+        let masks = [
+            "host": [Bool](repeating: true, count: 40),
+            "guest": [Bool](repeating: false, count: 10)
+                + [Bool](repeating: true, count: 30),
+        ]
+        let mask = DeadAirMaskResolver.mask(
+            for: clip,
+            in: group,
+            settings: settings,
+            quietMaskForMedia: { masks[$0] }
+        )
+
+        #expect(mask == [Bool](repeating: false, count: 9) + [Bool](repeating: true, count: 31))
+    }
+
+    @Test func silenceMaskAppliesMinimumPauseAfterMicIntersection() {
+        let settings = SilenceRemovalSettings(
+            minimumPauseSeconds: 1,
+            speechPaddingSeconds: 0
+        )!
+        var group = MulticamSource(name: "Podcast", members: [
+            .init(mediaRef: "host", kind: .mic, angleLabel: "host",
+                  sync: .init(offsetSeconds: 0, confidence: 1)),
+            .init(mediaRef: "guest", kind: .mic, angleLabel: "guest",
+                  sync: .init(offsetSeconds: 0, confidence: 1)),
+        ])
+        group.masterMemberId = group.members[0].id
+
+        var clip = Fixtures.clip(
+            mediaRef: "host", mediaType: .audio, start: 0, duration: 10
+        )
+        clip.multicamGroupId = group.id
+        let masks = [
+            "host": [Bool](repeating: true, count: 41)
+                + [Bool](repeating: false, count: 39),
+            "guest": [Bool](repeating: false, count: 30)
+                + [Bool](repeating: true, count: 41)
+                + [Bool](repeating: false, count: 9),
+        ]
+
+        #expect(SilenceRemovalPlanner.removableMask(
+            from: masks["host"]!, settings: settings
+        ).contains(true))
+        #expect(SilenceRemovalPlanner.removableMask(
+            from: masks["guest"]!, settings: settings
+        ).contains(true))
+
+        let mask = DeadAirMaskResolver.mask(
+            for: clip,
+            in: group,
+            settings: settings,
+            quietMaskForMedia: { masks[$0] }
+        )
+
+        #expect(mask?.contains(true) == false)
+    }
+
+    @Test func deadAirMaskCacheBuildsEachKeyOnce() {
+        let cache = DeadAirMaskCache()
+        let group = MulticamSource(name: "Podcast", members: [
+            .init(
+                mediaRef: "audio",
+                kind: .mic,
+                angleLabel: "mic",
+                sync: .init(offsetSeconds: 0, confidence: 1)
+            ),
+        ])
+        let key = DeadAirMaskCache.Key(
+            group: group,
+            member: group.members[0],
+            settings: .default
+        )
+        var builds = 0
+        func build() -> [Bool]? {
+            builds += 1
+            return [Bool](repeating: true, count: 82_416)
+        }
+
+        for _ in 0..<1_000 { _ = cache.value(for: key, build: build) }
+        #expect(builds == 1)
+        cache.reset()
+        #expect(cache.value(for: key, build: build)?.count == 82_416)
+        #expect(builds == 2)
+    }
+
+    @Test func orphanedMulticamClipDoesNotFallBackToSingleMediaMask() {
+        let group = MulticamSource(name: "Podcast", members: [
+            .init(
+                mediaRef: "member",
+                kind: .mic,
+                angleLabel: "member",
+                sync: .init(offsetSeconds: 0, confidence: 1)
+            ),
+        ])
+        var clip = Fixtures.clip(
+            mediaRef: "orphan",
+            mediaType: .audio,
+            start: 0,
+            duration: 30
+        )
+        clip.multicamGroupId = group.id
+        let harness = ToolHarness(timeline: Fixtures.timeline(tracks: [
+            Fixtures.audioTrack(clips: [clip]),
+        ]))
+        harness.editor.multicamGroups = [group]
+        harness.editor.mediaVisualCache.speech.installQuietNonSpeechMask(
+            [Bool](repeating: true, count: 40),
+            for: clip.mediaRef
+        )
+
+        #expect(harness.editor.deadAirSourceRanges(for: clip, settings: .default).isEmpty)
     }
 
     @Test func lagSearchKeepsHalfOverlap() {
@@ -151,11 +300,8 @@ struct MulticamTests {
     @Test func createUndoDropsClipsAndMetadata() throws {
         let h = harness()
         let undoManager = UndoManager()
-        undoManager.groupsByEvent = false
-        h.editor.undoManager = undoManager
-        undoManager.beginUndoGrouping()
+        h.editor.undo.attach(undoManager)
         let (groupId, _) = try createGroup(h)
-        undoManager.endUndoGrouping()
         undoManager.undo()
         #expect(h.editor.multicamClips(of: groupId).isEmpty)
         #expect(h.editor.multicamGroup(id: groupId) == nil)
@@ -333,8 +479,6 @@ struct MulticamTests {
         // Metadata stays in memory for undo, but is filtered from saves.
         #expect(h.editor.multicamGroup(id: groupId) != nil)
         #expect(h.editor.savedMulticamGroups() == nil)
-        h.editor.pruneMulticamGroups()
-        #expect(h.editor.multicamGroup(id: groupId) == nil)
     }
 
     // MARK: - Guardrails
@@ -438,6 +582,103 @@ struct MulticamTests {
             Issue.record("range ripple should pass")
             return
         }
+    }
+
+    @Test func alignedRippleTrimShrinksProgramAndMicTogether() throws {
+        let h = harness()
+        let (groupId, _) = try createGroup(h)
+        let seam = try rippleSeam(h, groupId: groupId)
+
+        h.editor.rippleTrimClip(
+            clipId: seam.leftProgram.id, edge: .right, deltaFrames: -60, propagateToLinked: false
+        )
+
+        #expect(h.editor.clipFor(id: seam.leftProgram.id)?.endFrame == 540)
+        #expect(h.editor.clipFor(id: seam.rightProgram.id)?.startFrame == 540)
+        #expect(h.editor.clipFor(id: seam.leftMic.id)?.endFrame == 540)
+        #expect(h.editor.clipFor(id: seam.rightMic.id)?.startFrame == 540)
+        #expect(h.editor.linkGroupOffsets().isEmpty)
+    }
+
+    @Test func alignedRippleExtendGrowsProgramAndMicTogether() throws {
+        let h = harness()
+        let (groupId, _) = try createGroup(h)
+        let seam = try rippleSeam(h, groupId: groupId)
+
+        let plan = try #require(h.editor.planRippleTrim(
+            clipId: seam.leftProgram.id, edge: .right, deltaFrames: 40, propagateToLinked: false
+        ))
+        #expect(plan.targetIds == Set([seam.leftProgram.id, seam.leftMic.id]))
+        h.editor.rippleTrimClip(
+            clipId: seam.leftProgram.id, edge: .right, deltaFrames: 40, propagateToLinked: false
+        )
+
+        #expect(h.editor.clipFor(id: seam.leftProgram.id)?.endFrame == 640)
+        #expect(h.editor.clipFor(id: seam.rightProgram.id)?.startFrame == 640)
+        #expect(h.editor.clipFor(id: seam.leftMic.id)?.endFrame == 640)
+        #expect(h.editor.clipFor(id: seam.rightMic.id)?.startFrame == 640)
+        #expect(h.editor.linkGroupOffsets().isEmpty)
+    }
+
+    @Test func alignedRippleShrinkStopsAtShortestMember() throws {
+        let h = harness()
+        let (groupId, _) = try createGroup(h)
+        let seam = try rippleSeam(h, groupId: groupId)
+        let micLoc = try #require(h.editor.findClip(id: seam.leftMic.id))
+        let shortenedDuration = 30
+        let removedHead = seam.leftMic.durationFrames - shortenedDuration
+        h.editor.timeline.tracks[micLoc.trackIndex].clips[micLoc.clipIndex].startFrame += removedHead
+        h.editor.timeline.tracks[micLoc.trackIndex].clips[micLoc.clipIndex].trimStartFrame += removedHead
+        h.editor.timeline.tracks[micLoc.trackIndex].clips[micLoc.clipIndex].setDuration(shortenedDuration)
+
+        let plan = try #require(h.editor.planRippleTrim(
+            clipId: seam.leftProgram.id, edge: .right, deltaFrames: -60, propagateToLinked: false
+        ))
+        #expect(plan.durationDelta == -(shortenedDuration - 1))
+        h.editor.rippleTrimClip(
+            clipId: seam.leftProgram.id, edge: .right, deltaFrames: -60, propagateToLinked: false
+        )
+
+        let expectedEdge = seam.leftProgram.endFrame - (shortenedDuration - 1)
+        #expect(h.editor.clipFor(id: seam.leftProgram.id)?.endFrame == expectedEdge)
+        #expect(h.editor.clipFor(id: seam.leftMic.id)?.durationFrames == 1)
+        #expect(h.editor.clipFor(id: seam.leftMic.id)?.endFrame == expectedEdge)
+        #expect(h.editor.clipFor(id: seam.rightProgram.id)?.startFrame == expectedEdge)
+        #expect(h.editor.clipFor(id: seam.rightMic.id)?.startFrame == expectedEdge)
+        #expect(h.editor.linkGroupOffsets().isEmpty)
+    }
+
+    @Test func alignedLeftRippleTargetsProgramAndMicTogether() throws {
+        let h = harness()
+        let (groupId, _) = try createGroup(h)
+        let seam = try rippleSeam(h, groupId: groupId)
+        let programTrim = seam.rightProgram.trimStartFrame
+        let micTrim = seam.rightMic.trimStartFrame
+
+        h.editor.rippleTrimClip(
+            clipId: seam.rightProgram.id, edge: .left, deltaFrames: 30, propagateToLinked: false
+        )
+
+        #expect(h.editor.clipFor(id: seam.rightProgram.id)?.trimStartFrame == programTrim + 30)
+        #expect(h.editor.clipFor(id: seam.rightMic.id)?.trimStartFrame == micTrim + 30)
+        #expect(h.editor.linkGroupOffsets().isEmpty)
+    }
+
+    @Test func alignedRippleTrimUndoesAsOneAction() throws {
+        let h = harness()
+        let (groupId, _) = try createGroup(h)
+        let seam = try rippleSeam(h, groupId: groupId)
+        let before = h.editor.timeline
+        let manager = UndoManager()
+        h.editor.undo.attach(manager)
+
+        h.editor.rippleTrimClip(
+            clipId: seam.leftProgram.id, edge: .right, deltaFrames: -60, propagateToLinked: false
+        )
+
+        #expect(manager.undoActionName == "Ripple Trim")
+        #expect(h.editor.undo.undoLatest() == "Ripple Trim")
+        #expect(h.editor.timeline == before)
     }
 
     @Test func manualRippleAfterGroupStaysAllowed() throws {

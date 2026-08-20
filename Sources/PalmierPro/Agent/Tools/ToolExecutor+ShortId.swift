@@ -7,9 +7,9 @@ extension ToolExecutor {
     private static let scalarIdKeys: Set<String> = [
         "clipId", "sourceClipId", "referenceClipId", "targetClipId",
         "mediaRef", "startFrameMediaRef", "endFrameMediaRef",
-        "sourceVideoMediaRef", "videoSourceMediaRef", "sourceMediaRef",
-        "captionGroupId", "timelineId", "item", "from", "reference",
-        "groupId", "memberId",
+        "sourceVideoMediaRef", "videoSourceMediaRef", "sourceMediaRef", "subtitleMediaRef",
+        "captionGroupId", "timelineId", "trackId", "item", "from", "reference",
+        "groupId", "memberId", "markerId",
     ]
     private static let arrayIdKeys: Set<String> = [
         "clipIds", "targetClipIds", "items", "ids", "deletes",
@@ -22,12 +22,14 @@ extension ToolExecutor {
         var ids = Set<String>()
         for timeline in editor.timelines { ids.insert(timeline.id) }
         for track in editor.timeline.tracks {
+            ids.insert(track.id)
             for clip in track.clips {
                 ids.insert(clip.id)
                 if let captionGroupId = clip.captionGroupId { ids.insert(captionGroupId) }
                 if let linkGroupId = clip.linkGroupId { ids.insert(linkGroupId) }
             }
         }
+        for marker in editor.timeline.markers { ids.insert(marker.id) }
         for asset in editor.mediaAssets { ids.insert(asset.id) }
         for group in editor.multicamGroups {
             ids.insert(group.id)

@@ -1,6 +1,6 @@
 import Foundation
 
-struct WordTiming: Codable, Sendable, Equatable {
+struct WordTiming: Codable, Sendable, Equatable, Hashable {
     var text: String
     var startFrame: Int
     var endFrame: Int
@@ -14,18 +14,17 @@ struct TextAnimation: Codable, Sendable, Equatable {
     enum Preset: String, Codable, CaseIterable, Sendable {
         case none
         // Whole-clip / per-line.
-        case fadeIn, popIn, slideUp, typewriter
+        case popIn, slideUp, typewriter
         // Per word.
-        case wordReveal, wordSlide, wordPop, wordCycle, highlightPop, highlightBlock
+        case wordReveal, wordSlide, highlightPop, highlightBlock
 
         enum RenderMode { case entrance, perWord, typewriter }
 
         var renderMode: RenderMode {
             switch self {
-            case .none, .fadeIn, .popIn, .slideUp: .entrance
+            case .none, .popIn, .slideUp: .entrance
             case .typewriter: .typewriter
-            case .wordReveal, .wordSlide, .wordPop, .wordCycle,
-                 .highlightPop, .highlightBlock: .perWord
+            case .wordReveal, .wordSlide, .highlightPop, .highlightBlock: .perWord
             }
         }
 
@@ -34,25 +33,21 @@ struct TextAnimation: Codable, Sendable, Equatable {
 
         var displayName: String {
             switch self {
-            case .none: "Off"
-            case .fadeIn: "Fade In"
-            case .popIn: "Pop In"
-            case .slideUp: "Slide Up"
-            case .typewriter: "Typewriter"
-            case .wordReveal: "Word Reveal"
-            case .wordSlide: "Word Slide"
-            case .wordPop: "Word Pop"
-            case .wordCycle: "Word Cycle"
-            case .highlightPop: "Highlight"
-            case .highlightBlock: "Highlight Block"
+            case .none: L10n.key("Off")
+            case .popIn: L10n.key("Pop In")
+            case .slideUp: L10n.key("Slide Up")
+            case .typewriter: L10n.key("Typewriter")
+            case .wordReveal: L10n.key("Word Reveal")
+            case .wordSlide: L10n.key("Word Slide")
+            case .highlightPop: L10n.key("Highlight")
+            case .highlightBlock: L10n.key("Highlight Block")
             }
         }
 
         static let agentValues: [String] = ["off"] + allCases.filter { $0 != .none }.map(\.rawValue)
 
-        static let perLine: [Preset] = [.fadeIn, .popIn, .slideUp, .typewriter]
-        static let perWord: [Preset] = [.wordReveal, .wordSlide, .wordPop, .wordCycle,
-                                        .highlightPop, .highlightBlock]
+        static let perLine: [Preset] = [.popIn, .slideUp, .typewriter]
+        static let perWord: [Preset] = [.wordReveal, .wordSlide, .highlightPop, .highlightBlock]
     }
 
     var isActive: Bool { preset != .none }

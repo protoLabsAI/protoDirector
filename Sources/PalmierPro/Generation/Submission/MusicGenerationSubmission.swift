@@ -17,9 +17,9 @@ struct MusicGenerationSubmission {
 
         var label: String {
             switch self {
-            case .exporting: "Exporting..."
-            case .uploading: "Uploading…"
-            case .generating: "Generating..."
+            case .exporting: L10n.key("Exporting…")
+            case .uploading: L10n.key("Uploading…")
+            case .generating: L10n.key("Generating…")
             }
         }
     }
@@ -71,6 +71,9 @@ struct MusicGenerationSubmission {
             duration: durationSeconds,
             aspectRatio: ""
         )
+        genInput.audioInput = mode == .textToMusic
+            ? AudioModelConfig.Input.text.rawValue
+            : AudioModelConfig.Input.video.rawValue
         genInput.createdAt = Date()
 
         onPhase(.generating)

@@ -242,6 +242,8 @@ enum MulticamEngine {
             && a.opacity == b.opacity
             && a.transform == b.transform
             && a.crop == b.crop
+            && a.edgeRounding == b.edgeRounding
+            && a.edgeSoftness == b.edgeSoftness
             && a.effects == b.effects
             && a.blendMode == b.blendMode
             && a.fadeOutFrames == 0 && b.fadeInFrames == 0
@@ -279,6 +281,7 @@ private extension Clip {
 
     var hasKeyframes: Bool {
         opacityTrack != nil || positionTrack != nil || scaleTrack != nil
-            || rotationTrack != nil || cropTrack != nil || volumeTrack != nil
+            || rotationTrack != nil || cropTrack != nil || blurKeyframeTrack != nil
+            || volumeTrack != nil
     }
 }

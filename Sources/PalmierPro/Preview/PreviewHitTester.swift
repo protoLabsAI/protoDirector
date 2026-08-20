@@ -15,7 +15,7 @@ enum PreviewHitTester {
         for track in editor.timeline.tracks where !track.hidden {
             for clip in track.clips where clip.mediaType == .text {
                 guard clip.contains(timelineFrame: frame), clip.opacityAt(frame: frame) > 0.01 else { continue }
-                if textHit(clip, point: point, videoRect: videoRect) { topText = clip.id }
+                if textHit(clip, frame: frame, point: point, videoRect: videoRect) { topText = clip.id }
             }
         }
         if let topText { return topText }
@@ -30,15 +30,23 @@ enum PreviewHitTester {
         return nil
     }
 
-    /// Text renders as an axis-aligned `CATextLayer` from the static transform — no rotation/crop.
-    private static func textHit(_ clip: Clip, point: CGPoint, videoRect: CGRect) -> Bool {
-        clipFrame(clip.transform, videoRect: videoRect).contains(point)
+    private static func textHit(_ clip: Clip, frame: Int, point: CGPoint, videoRect: CGRect) -> Bool {
+        let transform = clip.transformAt(frame: frame)
+        let rect = clipFrame(transform, videoRect: videoRect)
+        guard rect.width > 0, rect.height > 0 else { return false }
+        return TextTiltGeometry.corners(
+            of: rect,
+            around: CGPoint(x: rect.midX, y: rect.midY),
+            transform: transform,
+            canvasSize: videoRect.size
+        ).contains(point)
     }
 
     private static func videoHit(_ clip: Clip, frame: Int, point: CGPoint, videoRect: CGRect) -> Bool {
         let t = clip.transformAt(frame: frame)
         let rect = clipFrame(t, videoRect: videoRect)
         guard rect.width > 0, rect.height > 0 else { return false }
+        let crop = clip.cropAt(frame: frame)
 
         // Move the point into the clip's unrotated local space (origin at clip center).
         let center = CGPoint(x: rect.midX, y: rect.midY)
@@ -48,8 +56,6 @@ enum PreviewHitTester {
         let lx = dx * c + dy * s
         let ly = -dx * s + dy * c
 
-        // Local rect spans ±half-extents; crop trims it (crop is source-space, so local too).
-        let crop = clip.cropAt(frame: frame)
         let halfW = rect.width / 2, halfH = rect.height / 2
         let left = -halfW + crop.left * rect.width
         let right = halfW - crop.right * rect.width

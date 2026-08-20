@@ -71,13 +71,13 @@ enum OpenAICompatError: LocalizedError {
 
 // MARK: - Request body builder (POST /chat/completions)
 
-enum OpenAIRequestBody {
+enum GatewayChatRequestBody {
     static func build(
         model: String,
         maxTokens: Int,
         system: String,
-        tools: [AnthropicToolSchema],
-        messages: [AnthropicMessage]
+        tools: [AgentToolSchema],
+        messages: [AgentRequestMessage]
     ) -> [String: Any] {
         var out: [[String: Any]] = []
         if !system.isEmpty {
@@ -109,10 +109,10 @@ enum OpenAIRequestBody {
         return body
     }
 
-    // One Anthropic message can fan out to several OpenAI messages: a user turn with
-    // tool_result blocks becomes role:"tool" messages; an assistant turn with tool_use
+    // One agent message can fan out to several OpenAI messages: a user turn with
+    // toolResult blocks becomes role:"tool" messages; an assistant turn with toolUse
     // blocks becomes one assistant message carrying tool_calls.
-    private static func translate(_ msg: AnthropicMessage) -> [[String: Any]] {
+    private static func translate(_ msg: AgentRequestMessage) -> [[String: Any]] {
         let isUser = (msg.role == .user)
         var userParts: [[String: Any]] = []
         var toolMessages: [[String: Any]] = []
@@ -120,42 +120,37 @@ enum OpenAIRequestBody {
         var assistantText = ""
 
         for block in msg.content {
-            guard let type = block["type"] as? String else { continue }
-            switch type {
-            case "text":
-                let text = block["text"] as? String ?? ""
-                if isUser {
-                    userParts.append(["type": "text", "text": text])
-                } else {
-                    assistantText += text
-                }
-            case "image":
-                if let source = block["source"] as? [String: Any],
-                   let mime = source["media_type"] as? String,
-                   let data = source["data"] as? String {
-                    userParts.append([
-                        "type": "image_url",
-                        "image_url": ["url": "data:\(mime);base64,\(data)"],
+            switch block {
+            case .image(let base64, let mediaType):
+                userParts.append([
+                    "type": "image_url",
+                    "image_url": ["url": "data:\(mediaType);base64,\(base64)"],
+                ])
+            case .content(let content):
+                switch content {
+                case .thinking, .redactedThinking, .openAIReasoning:
+                    continue
+                case .text(let text):
+                    if isUser {
+                        userParts.append(["type": "text", "text": text])
+                    } else {
+                        assistantText += text
+                    }
+                case .toolUse(let id, let name, let inputJSON):
+                    toolCalls.append([
+                        "id": id,
+                        "type": "function",
+                        "function": ["name": name, "arguments": inputJSON],
+                    ])
+                case .toolResult(let toolUseId, let content, let isError):
+                    var parts = content.map(toolResultText)
+                    if isError { parts.insert("Tool error", at: 0) }
+                    toolMessages.append([
+                        "role": "tool",
+                        "tool_call_id": toolUseId,
+                        "content": parts.joined(separator: "\n"),
                     ])
                 }
-            case "tool_use":
-                let id = block["id"] as? String ?? ""
-                let name = block["name"] as? String ?? ""
-                let input = block["input"] as? [String: Any] ?? [:]
-                toolCalls.append([
-                    "id": id,
-                    "type": "function",
-                    "function": ["name": name, "arguments": jsonString(input)],
-                ])
-            case "tool_result":
-                let toolUseId = block["tool_use_id"] as? String ?? ""
-                toolMessages.append([
-                    "role": "tool",
-                    "tool_call_id": toolUseId,
-                    "content": toolResultText(block["content"]),
-                ])
-            default:
-                break
             }
         }
 
@@ -176,27 +171,13 @@ enum OpenAIRequestBody {
         return result
     }
 
-    private static func toolResultText(_ content: Any?) -> String {
-        if let s = content as? String { return s }
-        guard let blocks = content as? [[String: Any]] else { return "" }
-        var parts: [String] = []
-        for block in blocks {
-            switch block["type"] as? String {
-            case "text": parts.append(block["text"] as? String ?? "")
-            case "image": parts.append("[image]")
-            default: break
-            }
+    private static func toolResultText(_ block: ToolResult.Block) -> String {
+        switch block {
+        case .text(let text): text
+        case .image: "[image]"
         }
-        return parts.joined(separator: "\n")
     }
 
-    private static func jsonString(_ obj: [String: Any]) -> String {
-        guard JSONSerialization.isValidJSONObject(obj),
-              let data = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]),
-              let s = String(data: data, encoding: .utf8)
-        else { return "{}" }
-        return s
-    }
 }
 
 // MARK: - SSE parser (OpenAI chat-completions stream)
@@ -206,7 +187,7 @@ enum OpenAIRequestBody {
 /// thing to get wrong) is unit-testable with canned SSE lines.
 struct OpenAISSEDecoder {
     struct Step {
-        var events: [AnthropicStreamEvent] = []
+        var events: [AgentStreamEvent] = []
         var error: String?
     }
 
@@ -233,7 +214,7 @@ struct OpenAISSEDecoder {
         guard let choices = event["choices"] as? [[String: Any]],
               let choice = choices.first else { return Step() }
 
-        var events: [AnthropicStreamEvent] = []
+        var events: [AgentStreamEvent] = []
         if let delta = choice["delta"] as? [String: Any] {
             if let text = delta["content"] as? String, !text.isEmpty {
                 events.append(.textDelta(text))
@@ -246,7 +227,7 @@ struct OpenAISSEDecoder {
         if let reason = choice["finish_reason"] as? String {
             let hadTools = reason == "tool_calls" || !pending.isEmpty
             events.append(contentsOf: flush())
-            let stop: AnthropicStopReason = hadTools ? .toolUse
+            let stop: AgentStopReason = hadTools ? .toolUse
                 : (reason == "length" ? .maxTokens : .endTurn)
             events.append(.messageStop(stopReason: stop))
             stopped = true
@@ -255,7 +236,7 @@ struct OpenAISSEDecoder {
     }
 
     /// Emit a terminal stop when the stream closed without a finish_reason.
-    mutating func finish() -> [AnthropicStreamEvent] {
+    mutating func finish() -> [AgentStreamEvent] {
         if stopped { return [] }
         let hadTools = !pending.isEmpty
         var events = flush()
@@ -277,8 +258,8 @@ struct OpenAISSEDecoder {
         }
     }
 
-    private mutating func flush() -> [AnthropicStreamEvent] {
-        let events = pending.keys.sorted().map { index -> AnthropicStreamEvent in
+    private mutating func flush() -> [AgentStreamEvent] {
+        let events = pending.keys.sorted().map { index -> AgentStreamEvent in
             let tool = pending[index]!
             return .toolUseComplete(
                 id: tool.id,
@@ -291,10 +272,10 @@ struct OpenAISSEDecoder {
     }
 }
 
-enum OpenAISSE {
+enum GatewayChatSSE {
     static func parse(
         bytes: URLSession.AsyncBytes,
-        continuation: AsyncThrowingStream<AnthropicStreamEvent, Error>.Continuation
+        continuation: AsyncThrowingStream<AgentStreamEvent, Error>.Continuation
     ) async throws {
         var decoder = OpenAISSEDecoder()
         for try await line in bytes.lines {

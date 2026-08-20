@@ -3,23 +3,38 @@ import SwiftUI
 struct TextStyleTraitButtons: View {
     let isBold: Bool?
     let isItalic: Bool?
+    let isUnderlined: Bool?
+    let isStruckThrough: Bool?
+    let isOverlined: Bool?
     let onBold: (Bool) -> Void
     let onItalic: (Bool) -> Void
+    let onUnderline: (Bool) -> Void
+    let onStrikethrough: (Bool) -> Void
+    let onOverline: (Bool) -> Void
 
     var body: some View {
         HStack(spacing: AppTheme.Spacing.xs) {
             traitButton(
                 systemName: "bold",
-                label: "Bold",
+                label: L10n.string("Bold"),
                 state: isBold,
                 action: { onBold(!(isBold ?? false)) }
             )
             traitButton(
                 systemName: "italic",
-                label: "Italic",
+                label: L10n.string("Italic"),
                 state: isItalic,
                 action: { onItalic(!(isItalic ?? false)) }
             )
+            traitButton(systemName: "underline", label: L10n.string("Underline"), state: isUnderlined) {
+                onUnderline(!(isUnderlined ?? false))
+            }
+            traitButton(systemName: "strikethrough", label: L10n.string("Strikethrough"), state: isStruckThrough) {
+                onStrikethrough(!(isStruckThrough ?? false))
+            }
+            traitButton(systemName: "textformat", label: L10n.string("Overline"), state: isOverlined, overline: true) {
+                onOverline(!(isOverlined ?? false))
+            }
         }
     }
 
@@ -27,18 +42,24 @@ struct TextStyleTraitButtons: View {
         systemName: String,
         label: String,
         state: Bool?,
+        overline: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
         let isActive = state == true
         let isMixed = state == nil
         return Button(action: action) {
             Image(systemName: isMixed ? "minus" : systemName)
+                .overlay(alignment: .top) {
+                    if overline, !isMixed {
+                        Rectangle().frame(width: AppTheme.IconSize.xxs, height: AppTheme.BorderWidth.thin)
+                    }
+                }
                 .font(.system(size: AppTheme.FontSize.sm, weight: AppTheme.FontWeight.semibold))
                 .foregroundStyle(isActive ? AppTheme.Background.baseColor : AppTheme.Text.tertiaryColor)
                 .frame(width: AppTheme.IconSize.mdLg, height: AppTheme.IconSize.md)
                 .background(
                     RoundedRectangle(cornerRadius: AppTheme.Radius.xsSm)
-                        .fill(isActive ? AppTheme.Accent.primary : Color.white.opacity(AppTheme.Opacity.hint))
+                        .fill(isActive ? AppTheme.Accent.primary : AppTheme.Interaction.fill(AppTheme.Opacity.hint))
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: AppTheme.Radius.xsSm)
@@ -49,7 +70,7 @@ struct TextStyleTraitButtons: View {
                 )
         }
         .buttonStyle(.plain)
-        .help(label)
-        .accessibilityLabel(label)
+        .help(L10n.string(key: label))
+        .accessibilityLabel(L10n.string(key: label))
     }
 }

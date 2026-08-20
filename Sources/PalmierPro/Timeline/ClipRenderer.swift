@@ -45,6 +45,34 @@ enum ClipRenderer {
         return min(clipRect.maxX - edgeInset, max(clipRect.minX + edgeInset, actual))
     }
 
+    static func usesCompactRendering(in rect: NSRect) -> Bool {
+        rect.width < AppTheme.ComponentSize.timelineClipBorderMinWidth
+    }
+
+    static func supportsPrecisionControls(atWidth width: CGFloat) -> Bool {
+        width >= AppTheme.ComponentSize.timelineClipControlsMinWidth
+    }
+
+    static func supportsPrecisionControls(in rect: NSRect) -> Bool {
+        supportsPrecisionControls(atWidth: rect.width)
+    }
+
+    static func showsLabel(isSelected: Bool, in rect: NSRect) -> Bool {
+        let minimumWidth = isSelected
+            ? AppTheme.ComponentSize.timelineClipDetailMinWidth
+            : AppTheme.ComponentSize.timelineClipLabelMinWidth
+        return rect.width >= minimumWidth
+    }
+
+    static func showsFadeControls(isSelected: Bool, isHovered: Bool, in rect: NSRect) -> Bool {
+        guard supportsPrecisionControls(in: rect) else { return false }
+        return isHovered || isSelected
+    }
+
+    static func showsVolumeKeyframes(isSelected: Bool, isHovered: Bool, in rect: NSRect) -> Bool {
+        isSelected && showsFadeControls(isSelected: isSelected, isHovered: isHovered, in: rect)
+    }
+
     static func draw(
         _ clip: Clip,
         type: ClipType,
@@ -54,10 +82,12 @@ enum ClipRenderer {
         opacity: CGFloat = 1.0,
         context: CGContext,
         cache: MediaVisualCache? = nil,
+        deadAirRanges: @autoclosure () -> [Range<Double>] = [],
         displayName: String? = nil,
         linkOffset: Int? = nil,
         multicamAngleLabel: String? = nil,
         fps: Int,
+        showsKeyframeAutomation: Bool = true,
         isMissing: Bool = false,
         isGenerating: Bool = false
     ) {
@@ -66,11 +96,20 @@ enum ClipRenderer {
             context.setAlpha(opacity)
         }
 
+        let colorType = clip.sourceClipType
+        if usesCompactRendering(in: rect) {
+            let color = isMissing && !isGenerating
+                ? AppTheme.Status.error
+                : (isSelected ? AppTheme.MediaOverlay.primary : colorType.themeColor)
+            context.setFillColor(color.cgColor)
+            context.fill(rect)
+            if opacity < 1.0 { context.restoreGState() }
+            return
+        }
+
         let cornerRadius = Trim.clipCornerRadius
         let path = CGPath(roundedRect: rect, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
 
-
-        let colorType = clip.sourceClipType
         context.setFillColor(colorType.themeColor.cgColor)
         context.addPath(path)
         context.fillPath()
@@ -95,15 +134,27 @@ enum ClipRenderer {
             drawTiledImage(image: image, in: thumbRect, clipRect: rect, cornerRadius: cornerRadius, context: context)
         } else if type == .audio, let samples = cache?.samples(for: clip.mediaRef), !samples.isEmpty {
             let audioRect = CGRect(x: contentX, y: contentY, width: contentWidth, height: mainHeight)
-            let mask = markDeadAir ? cache?.deadAirMask(for: clip.mediaRef) : nil
-            drawWaveform(samples: samples, deadAirMask: mask,
+            drawWaveform(samples: samples, deadAirRanges: deadAirRanges(),
                          speakerMask: speakerColors.isEmpty ? nil : cache?.speakerMask(for: clip.mediaRef),
                          clip: clip, type: colorType, in: audioRect, context: context)
+        } else if type == .text, showsLabel(isSelected: isSelected, in: rect) {
+            drawTextParagraph(clip: clip, displayName: displayName, in: rect)
         }
 
-        let showsFadeControls = isSelected || isHovered
+        let showsFadeControls = showsFadeControls(isSelected: isSelected, isHovered: isHovered, in: rect)
+        let volumeKeyframesVisible = showsKeyframeAutomation && showsVolumeKeyframes(
+            isSelected: isSelected,
+            isHovered: isHovered,
+            in: rect
+        )
         if type == .audio {
-            drawVolumeRubberBand(clip: clip, in: rect, isSelected: isSelected, showsFadeControls: showsFadeControls, context: context)
+            drawVolumeRubberBand(
+                clip: clip,
+                in: rect,
+                showsFadeControls: showsFadeControls,
+                showsVolumeKeyframes: volumeKeyframesVisible,
+                context: context
+            )
         } else {
             drawOpacityFades(clip: clip, in: rect, showsFadeControls: showsFadeControls, context: context)
         }
@@ -117,7 +168,7 @@ enum ClipRenderer {
         }
 
         if isSelected {
-            context.setStrokeColor(AppTheme.Text.primary.cgColor)
+            context.setStrokeColor(AppTheme.Border.timelineClipSelected.cgColor)
             context.setLineWidth(AppTheme.BorderWidth.medium)
             context.addPath(path)
             context.strokePath()
@@ -125,7 +176,7 @@ enum ClipRenderer {
 
         // Subtle wash while the clip's media is being rendered/generated.
         if isGenerating {
-            context.setFillColor(NSColor.white.withAlphaComponent(AppTheme.Opacity.faint).cgColor)
+            context.setFillColor(AppTheme.MediaOverlay.primary.withAlphaComponent(AppTheme.Opacity.faint).cgColor)
             context.addPath(path)
             context.fillPath()
         }
@@ -141,10 +192,10 @@ enum ClipRenderer {
             context.strokePath()
         }
 
-        let showDetailChrome = isSelected || rect.width >= AppTheme.ComponentSize.timelineClipDetailMinWidth
-        let showLabel = isSelected || rect.width >= AppTheme.ComponentSize.timelineClipLabelMinWidth
+        let showDetailChrome = rect.width >= AppTheme.ComponentSize.timelineClipDetailMinWidth
+        let showLabel = showsLabel(isSelected: isSelected, in: rect)
 
-        if showLabel {
+        if showLabel, type != .text {
             drawLabelBar(clip: clip, type: type, in: labelRect, clipRect: rect, context: context,
                          displayName: displayName, badge: multicamAngleLabel, fps: fps)
         } else if multicamAngleLabel != nil, rect.width >= AppTheme.ComponentSize.timelineClipBorderMinWidth {
@@ -158,7 +209,7 @@ enum ClipRenderer {
             drawOffsetBadge(frames: linkOffset, in: rect, context: context)
         }
 
-        if showDetailChrome {
+        if showDetailChrome, showsKeyframeAutomation {
             drawKeyframeMarkers(clip: clip, in: rect, context: context)
         }
 
@@ -180,7 +231,9 @@ enum ClipRenderer {
         for kf in clip.opacityTrack?.keyframes ?? [] { frameSet.insert(kf.frame + absStart) }
         for kf in clip.positionTrack?.keyframes ?? [] { frameSet.insert(kf.frame + absStart) }
         for kf in clip.scaleTrack?.keyframes ?? [] { frameSet.insert(kf.frame + absStart) }
+        for kf in clip.rotationTrack?.keyframes ?? [] { frameSet.insert(kf.frame + absStart) }
         for kf in clip.cropTrack?.keyframes ?? [] { frameSet.insert(kf.frame + absStart) }
+        for kf in clip.blurKeyframeTrack?.keyframes ?? [] { frameSet.insert(kf.frame + absStart) }
         let frames = frameSet.sorted()
         guard !frames.isEmpty, clip.durationFrames > 0 else { return }
         let pxPerFrame = rect.width / CGFloat(clip.durationFrames)
@@ -189,7 +242,7 @@ enum ClipRenderer {
         let y = rect.maxY - 5
         let half: CGFloat = 3
         context.setFillColor(NSColor.systemYellow.withAlphaComponent(0.95).cgColor)
-        context.setStrokeColor(NSColor.black.withAlphaComponent(0.5).cgColor)
+        context.setStrokeColor(AppTheme.MediaOverlay.background.withAlphaComponent(0.5).cgColor)
         context.setLineWidth(0.5)
         for f in frames where clip.contains(timelineFrame: f) {
             let x = baseX + CGFloat(f - clip.startFrame) * pxPerFrame
@@ -204,9 +257,9 @@ enum ClipRenderer {
         }
     }
 
-    private static let beatTickColor = NSColor.systemOrange.withAlphaComponent(0.7).cgColor
-    private static let downbeatTickColor = NSColor.systemOrange.cgColor
-    private static let beatTickBackingColor = NSColor.black.withAlphaComponent(0.55).cgColor
+    private static var beatTickColor: CGColor { NSColor.systemOrange.withAlphaComponent(0.7).cgColor }
+    private static var downbeatTickColor: CGColor { NSColor.systemOrange.cgColor }
+    private static let beatTickBackingColor = AppTheme.MediaOverlay.background.withAlphaComponent(0.55).cgColor
     private static let beatTickWidth: CGFloat = 1
     private static let beatTickHeight: CGFloat = 7
     private static let downbeatTickHeight: CGFloat = 14
@@ -260,14 +313,15 @@ enum ClipRenderer {
 
     // MARK: - Waveform
 
-    private static let washColor = AppTheme.Status.error.withAlphaComponent(AppTheme.Opacity.medium).cgColor
+    private static var washColor: CGColor {
+        AppTheme.Status.error.withAlphaComponent(AppTheme.Opacity.medium).cgColor
+    }
     nonisolated(unsafe) static var speakerColors: [Int: CGColor] = [:]
-    private static var markDeadAir: Bool { UserDefaults.standard.object(forKey: "markDeadAir") as? Bool ?? true }
     private static var markBeats: Bool { UserDefaults.standard.object(forKey: "markBeats") as? Bool ?? true }
 
     private static func drawWaveform(
         samples: [Float],
-        deadAirMask: [Bool]?,
+        deadAirRanges: [Range<Double>],
         speakerMask: [Int]? = nil,
         clip: Clip,
         type: ClipType,
@@ -297,7 +351,7 @@ enum ClipRenderer {
         let lastBar = min(barCount, Int(ceil(visible.maxX - drawRect.minX)))
         guard firstBar < lastBar else { return }
 
-        context.setFillColor(AppTheme.Text.primary.withAlphaComponent(AppTheme.Opacity.high).cgColor)
+        context.setFillColor(type.themeForegroundColor.withAlphaComponent(AppTheme.Opacity.high).cgColor)
 
         let dur = CGFloat(max(1, clip.durationFrames))
         let frameStep = dur / CGFloat(barCount)
@@ -309,11 +363,8 @@ enum ClipRenderer {
         let needsPerBarVolume = (clip.volumeTrack?.isActive ?? false) || clip.fadeInFrames > 0 || clip.fadeOutFrames > 0
         let staticShift = CGFloat(VolumeScale.dbFromLinear(clip.volume)) / dbRange
 
-        // Dead-air shading maps the mask through the same source fractions as samples.
-        let maskCount = deadAirMask?.count ?? 0
-        let maskStart = max(0, min(maskCount, Int(startFrac * Double(maskCount))))
-        let maskEnd = max(maskStart, min(maskCount, Int(endFrac * Double(maskCount))))
-        let maskVisCount = maskEnd - maskStart
+        let visibleSourceStart = Double(clip.trimStartFrame)
+        let visibleSourceEnd = Double(clip.trimStartFrame + clip.sourceFramesConsumed)
         var washes: [CGRect] = []
         let spkCount = speakerMask?.count ?? 0
         let spkStart = max(0, min(spkCount, Int(startFrac * Double(spkCount))))
@@ -323,6 +374,7 @@ enum ClipRenderer {
 
         var bars: [CGRect] = []
         bars.reserveCapacity(lastBar - firstBar)
+        var deadAirRangeIndex = 0
         for i in firstBar..<lastBar {
             // Peak-detect (min, since 0=loud) over the bar's range so zero crossings don't flatten loud audio.
             let sStart = sampleStart + i * visCount / barCount
@@ -355,10 +407,15 @@ enum ClipRenderer {
                 bars.append(bar)
             }
 
-            if let deadAirMask, maskVisCount > 0 {
-                let m0 = maskStart + i * maskVisCount / barCount
-                let m1 = min(maskEnd, max(m0 + 1, maskStart + (i + 1) * maskVisCount / barCount))
-                if deadAirMask[m0..<m1].contains(true) {
+            if !deadAirRanges.isEmpty {
+                let m0 = visibleSourceStart + Double(i) * (visibleSourceEnd - visibleSourceStart) / Double(barCount)
+                let m1 = visibleSourceStart + Double(i + 1) * (visibleSourceEnd - visibleSourceStart) / Double(barCount)
+                while deadAirRangeIndex < deadAirRanges.count,
+                      deadAirRanges[deadAirRangeIndex].upperBound <= m0 {
+                    deadAirRangeIndex += 1
+                }
+                if deadAirRangeIndex < deadAirRanges.count,
+                   deadAirRanges[deadAirRangeIndex].lowerBound < m1 {
                     washes.append(CGRect(x: drawRect.minX + CGFloat(i), y: drawRect.minY, width: 1, height: drawRect.height))
                 }
             }
@@ -382,8 +439,8 @@ enum ClipRenderer {
     private static func drawVolumeRubberBand(
         clip: Clip,
         in rect: NSRect,
-        isSelected: Bool,
         showsFadeControls: Bool,
+        showsVolumeKeyframes: Bool,
         context: CGContext
     ) {
         guard clip.durationFrames > 0 else { return }
@@ -392,8 +449,9 @@ enum ClipRenderer {
 
         let body = clipBodyRect(in: rect)
         let alpha: CGFloat = showsFadeControls ? 0.95 : 0.75
-        let lineColor = NSColor.white.withAlphaComponent(alpha).cgColor
-        let fadeColor = NSColor.white.withAlphaComponent(alpha * 0.7).cgColor
+        let foreground = clip.sourceClipType.themeForegroundColor
+        let lineColor = foreground.withAlphaComponent(alpha).cgColor
+        let fadeColor = foreground.withAlphaComponent(alpha * 0.7).cgColor
 
         // 1) Volume line — through kfs, or flat at static volume when no kfs.
         context.setStrokeColor(lineColor)
@@ -473,9 +531,9 @@ enum ClipRenderer {
 
         let half = volumeKeyframeSize / 2
 
-        if isSelected {
-            context.setFillColor(lineColor)
-            context.setStrokeColor(NSColor.black.withAlphaComponent(0.5).cgColor)
+        if showsVolumeKeyframes {
+            context.setFillColor(AppTheme.Accent.timecodeNSColor.cgColor)
+            context.setStrokeColor(AppTheme.MediaOverlay.background.withAlphaComponent(0.5).cgColor)
             context.setLineWidth(0.5)
 
             // 4) Keyframe diamonds — independent of the fade knees.
@@ -509,8 +567,9 @@ enum ClipRenderer {
 
         let body = clipBodyRect(in: rect)
         let alpha: CGFloat = showsFadeControls ? 0.95 : 0.75
-        let lineColor = NSColor.white.withAlphaComponent(alpha).cgColor
-        let fadeColor = NSColor.white.withAlphaComponent(alpha * 0.7).cgColor
+        let foreground = clip.sourceClipType.themeForegroundColor
+        let lineColor = foreground.withAlphaComponent(alpha).cgColor
+        let fadeColor = foreground.withAlphaComponent(alpha * 0.7).cgColor
 
         let leftOffset = min(clip.fadeInFrames, clip.durationFrames)
         let rightOffset = max(0, clip.durationFrames - clip.fadeOutFrames)
@@ -562,7 +621,7 @@ enum ClipRenderer {
         defer { context.restoreGState() }
 
         context.setFillColor(fillColor)
-        context.setStrokeColor(AppTheme.Background.base.withAlphaComponent(CGFloat(AppTheme.Opacity.strong)).cgColor)
+        context.setStrokeColor(AppTheme.MediaOverlay.background.withAlphaComponent(CGFloat(AppTheme.Opacity.strong)).cgColor)
         context.setLineWidth(AppTheme.BorderWidth.hairline)
         context.fill(rect)
         context.stroke(rect)
@@ -590,13 +649,13 @@ enum ClipRenderer {
         fill.addLine(to: end)
         fill.closeSubpath()
         context.addPath(fill)
-        context.setFillColor(AppTheme.Background.base.withAlphaComponent(CGFloat(AppTheme.Opacity.strong)).cgColor)
+        context.setFillColor(AppTheme.MediaOverlay.background.withAlphaComponent(CGFloat(AppTheme.Opacity.strong)).cgColor)
         context.fillPath()
 
         context.beginPath()
         context.move(to: start)
         context.addLine(to: end)
-        context.setStrokeColor(AppTheme.Background.base.withAlphaComponent(CGFloat(AppTheme.Opacity.prominent)).cgColor)
+        context.setStrokeColor(AppTheme.MediaOverlay.background.withAlphaComponent(CGFloat(AppTheme.Opacity.prominent)).cgColor)
         context.setLineWidth(AppTheme.BorderWidth.thin)
         context.setLineCap(.round)
         context.setLineJoin(.round)
@@ -625,7 +684,7 @@ enum ClipRenderer {
         fill.closeSubpath()
         context.saveGState()
         context.addPath(fill)
-        context.setFillColor(NSColor.black.withAlphaComponent(fillAlpha).cgColor)
+        context.setFillColor(AppTheme.MediaOverlay.background.withAlphaComponent(fillAlpha).cgColor)
         context.fillPath()
         context.restoreGState()
 
@@ -760,39 +819,60 @@ enum ClipRenderer {
     // MARK: - Label Bar
 
     @discardableResult
-    private static func drawPill(_ text: String, textColor: NSColor, fill: NSColor, fontSize: CGFloat, at origin: NSPoint, maxWidth: CGFloat, context: CGContext) -> NSRect? {
+    static func drawPill(_ text: String, textColor: NSColor, fill: NSColor, fontSize: CGFloat, at origin: NSPoint, maxWidth: CGFloat, context: CGContext) -> NSRect? {
         let padH = AppTheme.ComponentSize.timelineBadgePadH
         let padV = AppTheme.ComponentSize.timelineBadgePadV
         guard !text.isEmpty, maxWidth > AppTheme.ComponentSize.timelineBadgeMinWidth else { return nil }
+        let style = NSMutableParagraphStyle()
+        style.lineBreakMode = .byTruncatingTail
         let str = NSAttributedString(string: text, attributes: [
             .font: NSFont.systemFont(ofSize: fontSize, weight: .semibold),
             .foregroundColor: textColor,
+            .paragraphStyle: style,
         ])
         let size = str.size()
         let rect = NSRect(x: origin.x, y: origin.y,
                           width: min(size.width + padH * 2, maxWidth), height: size.height + padV * 2)
-        context.saveGState()
         let path = CGPath(roundedRect: rect, cornerWidth: AppTheme.Radius.xs, cornerHeight: AppTheme.Radius.xs, transform: nil)
         context.setFillColor(fill.cgColor)
         context.addPath(path)
         context.fillPath()
-        context.clip(to: rect.insetBy(dx: AppTheme.Spacing.xxs, dy: 0))
-        str.draw(at: NSPoint(x: rect.minX + padH, y: rect.minY + padV))
-        context.restoreGState()
+        let inset = AppTheme.BorderWidth.hairline
+        str.draw(with: rect.insetBy(dx: padH - inset, dy: inset), options: [.usesLineFragmentOrigin])
         return rect
     }
 
-    private static func drawLabelBar(clip: Clip, type: ClipType, in labelRect: NSRect, clipRect: NSRect, context: CGContext, displayName: String? = nil, badge: String? = nil, fps: Int) {
-        guard clipRect.width > 20 else { return }
+    private static func drawTextParagraph(clip: Clip, displayName: String?, in rect: NSRect) {
+        let content = clip.textContent?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let text = content.isEmpty ? (displayName ?? "") : content
+        guard !text.isEmpty else { return }
 
+        let drawRect = rect.insetBy(dx: AppTheme.Spacing.sm, dy: AppTheme.Spacing.xxs)
+        guard !drawRect.isEmpty else { return }
+
+        NSAttributedString(string: text, attributes: [
+            .font: NSFont.systemFont(ofSize: AppTheme.FontSize.xs, weight: .medium),
+            .foregroundColor: clip.sourceClipType.themeForegroundColor,
+        ]).draw(with: drawRect, options: [.usesLineFragmentOrigin], context: nil)
+    }
+
+    private static func drawLabelBar(clip: Clip, type: ClipType, in labelRect: NSRect, clipRect: NSRect, context: CGContext, displayName: String? = nil, badge: String? = nil, fps: Int) {
         var labelRect = labelRect
-        if let badge,
-           let chipRect = drawPill(badge, textColor: NSColor.black.withAlphaComponent(AppTheme.Opacity.prominent),
-                                   fill: AppTheme.TrackColor.multicam, fontSize: AppTheme.FontSize.xxs,
-                                   at: NSPoint(x: labelRect.minX + AppTheme.Spacing.xs, y: labelRect.minY + AppTheme.Spacing.xxs),
-                                   maxWidth: labelRect.width - AppTheme.Spacing.smMd, context: context) {
-            labelRect.origin.x = chipRect.maxX + AppTheme.Spacing.xxs
-            labelRect.size.width -= chipRect.width + AppTheme.Spacing.sm
+        if let badge {
+            let fill = AppTheme.TrackColor.multicam
+            let textColor = AppTheme.TrackColor.readableForeground(on: fill)
+            if let chipRect = drawPill(
+                badge,
+                textColor: textColor.withAlphaComponent(AppTheme.Opacity.prominent),
+                fill: fill,
+                fontSize: AppTheme.FontSize.xxs,
+                at: NSPoint(x: labelRect.minX + AppTheme.Spacing.xs, y: labelRect.minY + AppTheme.Spacing.xxs),
+                maxWidth: labelRect.width - AppTheme.Spacing.smMd,
+                context: context
+            ) {
+                labelRect.origin.x = chipRect.maxX + AppTheme.Spacing.xxs
+                labelRect.size.width -= chipRect.width + AppTheme.Spacing.sm
+            }
         }
 
         let timecode = formatClipDuration(frame: clip.durationFrames, fps: fps)
@@ -802,12 +882,9 @@ enum ClipRenderer {
 
         let baseAttrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: AppTheme.FontSize.xs, weight: .medium),
-            .foregroundColor: AppTheme.Text.primary,
+            .foregroundColor: clip.sourceClipType.themeForegroundColor,
         ]
-        let attributed = NSMutableAttributedString(string: text, attributes: baseAttrs)
-        if clip.linkGroupId != nil {
-            attributed.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: NSRange(location: 0, length: (name as NSString).length))
-        }
+        let attributed = NSAttributedString(string: text, attributes: baseAttrs)
         let size = attributed.size()
         let inset = AppTheme.Spacing.sm
         let origin = NSPoint(
@@ -831,7 +908,7 @@ enum ClipRenderer {
 
     // MARK: - Out-of-sync offset badge
 
-    private static let offsetBadgeColor = NSColor(red: 1.0, green: 0.28, blue: 0.28, alpha: 1.0)
+    private static let offsetBadgeColor = AppTheme.MediaOverlay.error
 
     private static func drawOffsetBadge(frames: Int, in rect: NSRect, context: CGContext) {
         let text = frames > 0 ? "+\(frames)" : "\(frames)"
@@ -841,7 +918,7 @@ enum ClipRenderer {
         ]).size().width + padH * 2
         let x = rect.maxX - Trim.handleWidth - width - AppTheme.Spacing.xxs
         guard x > rect.minX + AppTheme.Spacing.sm else { return }
-        drawPill(text, textColor: .white, fill: offsetBadgeColor, fontSize: AppTheme.FontSize.xs,
+        drawPill(text, textColor: AppTheme.MediaOverlay.primary, fill: offsetBadgeColor, fontSize: AppTheme.FontSize.xs,
                  at: NSPoint(x: x, y: rect.minY + AppTheme.Spacing.xxs), maxWidth: width, context: context)
     }
 
